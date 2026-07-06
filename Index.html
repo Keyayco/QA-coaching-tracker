@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Coaching Tracker</title>
+    <style>
+      :root {
+        --bg: #f3f6fb;
+        --surface: #ffffff;
+        --surface-alt: #f8fafc;
+        --border: #d9e2ec;
+        --text: #102a43;
+        --muted: #627d98;
+        --primary: #1565c0;
+        --primary-dark: #0d47a1;
+        --success-bg: #ecfdf3;
+        --success-text: #027a48;
+        --error-bg: #fef3f2;
+        --error-text: #b42318;
+        --shadow: 0 10px 30px rgba(16, 42, 67, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .app-shell {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 24px 16px 40px;
+      }
+
+      .app-header {
+        margin-bottom: 20px;
+      }
+
+      .app-header h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+
+      .app-header p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+      }
+
+      .controls-panel {
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+
+      .controls-grid,
+      .summary-grid,
+      .detail-grid,
+      .actions-row {
+        display: grid;
+        gap: 16px;
+      }
+
+      .controls-grid {
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      }
+
+      .field-group label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+      }
+
+      .field-group input,
+      .field-group select,
+      .field-group textarea {
+        width: 100%;
+        padding: 11px 12px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: #fff;
+        color: var(--text);
+        font: inherit;
+      }
+
+      .field-group textarea {
+        min-height: 100px;
+        resize: vertical;
+      }
+
+      .field-group input[readonly] {
+        background: var(--surface-alt);
+      }
+
+      .status-banner {
+        display: none;
+        margin-bottom: 16px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        font-weight: 600;
+      }
+
+      .status-banner.visible {
+        display: block;
+      }
+
+      .status-banner.success {
+        background: var(--success-bg);
+        color: var(--success-text);
+      }
+
+      .status-banner.error {
+        background: var(--error-bg);
+        color: var(--error-text);
+      }
+
+      .status-banner.info {
+        background: #eef4ff;
+        color: var(--primary-dark);
+      }
+
+      .summary-panel,
+      .history-panel {
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+
+      .panel-title {
+        margin: 0 0 16px;
+        font-size: 18px;
+      }
+
+      .summary-grid {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        margin-bottom: 20px;
+      }
+
+      .summary-card {
+        padding: 16px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--surface-alt);
+      }
+
+      .summary-card span {
+        display: block;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 6px;
+      }
+
+      .summary-card strong {
+        font-size: 20px;
+      }
+
+      .detail-grid {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      }
+
+      .detail-item {
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: #fff;
+      }
+
+      .detail-item span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .actions-row {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        margin-bottom: 20px;
+      }
+
+      .action-button,
+      .secondary-button {
+        border: 0;
+        border-radius: 10px;
+        padding: 12px 14px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .action-button {
+        background: var(--primary);
+        color: #fff;
+      }
+
+      .action-button:hover {
+        background: var(--primary-dark);
+      }
+
+      .secondary-button {
+        background: #e7eef7;
+        color: var(--text);
+      }
+
+      .action-button:disabled,
+      .secondary-button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .tab-button {
+        border: 1px solid var(--border);
+        background: #fff;
+        color: var(--muted);
+        border-radius: 999px;
+        padding: 10px 14px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .tab-button.active {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: #fff;
+      }
+
+      .table-shell {
+        overflow-x: auto;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 640px;
+        background: #fff;
+      }
+
+      th,
+      td {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: var(--surface-alt);
+        font-size: 13px;
+      }
+
+      .empty-state {
+        padding: 30px 16px;
+        text-align: center;
+        color: var(--muted);
+      }
+
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(16, 42, 67, 0.45);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+      }
+
+      .modal-backdrop.open {
+        display: flex;
+      }
+
+      .modal {
+        width: min(720px, 100%);
+        max-height: 90vh;
+        overflow-y: auto;
+        background: #fff;
+        border-radius: 18px;
+        padding: 20px;
+        box-shadow: var(--shadow);
+      }
+
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .modal-header h2 {
+        margin: 0;
+        font-size: 22px;
+      }
+
+      .modal-body {
+        display: grid;
+        gap: 14px;
+      }
+
+      .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      @media (max-width: 768px) {
+        .app-shell {
+          padding: 18px 12px 28px;
+        }
+
+        .summary-card strong {
+          font-size: 18px;
+        }
+
+        .modal {
+          padding: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <h1>Coaching Tracker</h1>
+        <p>Google Sheets remains the only permanent source of truth. Dashboard metrics are calculated in memory only.</p>
+      </header>
+
+      <div id="statusBanner" class="status-banner"></div>
+
+      <section class="panel controls-panel">
+        <div class="controls-grid">
+          <div class="field-group">
+            <label for="departmentSelect">Department</label>
+            <select id="departmentSelect">
+              <option value="">Select a department</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label for="agentSelect">Agent</label>
+            <select id="agentSelect" disabled>
+              <option value="">Select an agent</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel summary-panel">
+        <h2 class="panel-title">Agent Summary</h2>
+        <div class="summary-grid" id="summaryGrid">
+          <div class="summary-card"><span>Agent</span><strong id="summaryAgent">None selected</strong></div>
+          <div class="summary-card"><span>Coaching Count</span><strong id="summaryCoachingCount">0</strong></div>
+          <div class="summary-card"><span>Average Score</span><strong id="summaryAverageScore">N/A</strong></div>
+          <div class="summary-card"><span>Latest Coaching</span><strong id="summaryLatestCoaching">None</strong></div>
+          <div class="summary-card"><span>Latest Score</span><strong id="summaryLatestScore">None</strong></div>
+          <div class="summary-card"><span>Latest Dispute</span><strong id="summaryLatestDispute">None</strong></div>
+        </div>
+
+        <div class="detail-grid" id="agentDetails">
+          <div class="detail-item">
+            <span>Status</span>
+            <strong>Select an agent to load details.</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel history-panel">
+        <div class="actions-row">
+          <button id="addCoachingButton" class="action-button" data-form-type="coaching" disabled>Add Coaching</button>
+          <button id="addScoreButton" class="action-button" data-form-type="score" disabled>Add Score</button>
+          <button id="addDisputeButton" class="action-button" data-form-type="dispute" disabled>Add Dispute</button>
+        </div>
+
+        <div class="tabs">
+          <button class="tab-button active" data-tab="coaching">Coaching History</button>
+          <button class="tab-button" data-tab="score">Score History</button>
+          <button class="tab-button" data-tab="dispute">Disputes</button>
+        </div>
+
+        <div id="historyContent"></div>
+      </section>
+    </div>
+
+    <div id="modalBackdrop" class="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header">
+          <h2 id="modalTitle">Add Record</h2>
+          <button id="closeModalButton" class="secondary-button" type="button">Close</button>
+        </div>
+        <form id="recordForm">
+          <div id="modalBody" class="modal-body"></div>
+          <div class="modal-actions">
+            <button class="secondary-button" type="button" id="cancelModalButton">Cancel</button>
+            <button class="action-button" type="submit" id="saveModalButton">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script>
+      var appState = {
+        initialData: null,
+        agents: [],
+        currentDashboard: null,
+        selectedDepartmentId: '',
+        selectedAgentId: '',
+        activeTab: 'coaching',
+        activeFormType: ''
+      };
+
+      var formConfig = {
+        coaching: {
+          title: 'Add Coaching',
+          method: 'saveCoaching'
+        },
+        score: {
+          title: 'Add Score',
+          method: 'saveScore'
+        },
+        dispute: {
+          title: 'Add Dispute',
+          method: 'saveDispute'
+        }
+      };
+
+      document.addEventListener('DOMContentLoaded', function () {
+        bindEvents();
+        loadInitialData();
+      });
+
+      function bindEvents() {
+        document.getElementById('departmentSelect').addEventListener('change', handleDepartmentChange);
+        document.getElementById('agentSelect').addEventListener('change', handleAgentChange);
+        document.getElementById('recordForm').addEventListener('submit', handleRecordSave);
+        document.getElementById('closeModalButton').addEventListener('click', closeModal);
+        document.getElementById('cancelModalButton').addEventListener('click', closeModal);
+        document.getElementById('modalBackdrop').addEventListener('click', function (event) {
+          if (event.target.id === 'modalBackdrop') {
+            closeModal();
+          }
+        });
+
+        Array.prototype.slice.call(document.querySelectorAll('[data-form-type]')).forEach(function (button) {
+          button.addEventListener('click', function () {
+            openModal(button.getAttribute('data-form-type'));
+          });
+        });
+
+        Array.prototype.slice.call(document.querySelectorAll('[data-tab]')).forEach(function (button) {
+          button.addEventListener('click', function () {
+            setActiveTab(button.getAttribute('data-tab'));
+          });
+        });
+      }
+
+      function loadInitialData() {
+        showStatus('Loading departments and form definitions...', 'info');
+        callServer('getInitialData', undefined, function (result) {
+          appState.initialData = result;
+          renderDepartments(result.departments || []);
+          renderHistory();
+          showStatus('Ready. Select a department to begin.', 'success');
+        });
+      }
+
+      function handleDepartmentChange(event) {
+        appState.selectedDepartmentId = event.target.value;
+        appState.selectedAgentId = '';
+        appState.currentDashboard = null;
+        renderAgents([]);
+        resetDashboard();
+
+        if (!appState.selectedDepartmentId) {
+          showStatus('Select a department to load its agents.', 'info');
+          return;
+        }
+
+        showStatus('Loading agents...', 'info');
+        callServer('getAgentsByDepartment', appState.selectedDepartmentId, function (result) {
+          appState.agents = result.agents || [];
+          renderAgents(appState.agents);
+          if (appState.agents.length) {
+            showStatus('Agents loaded. Select an agent to view the dashboard.', 'success');
+          } else {
+            showStatus('No agents were found for the selected department.', 'info');
+          }
+        });
+      }
+
+      function handleAgentChange(event) {
+        appState.selectedAgentId = event.target.value;
+        appState.currentDashboard = null;
+        renderActionButtons();
+        renderHistory();
+
+        if (!appState.selectedAgentId) {
+          resetDashboard();
+          showStatus('Select an agent to load coaching, score, and dispute data.', 'info');
+          return;
+        }
+
+        loadAgentDashboard(appState.selectedAgentId, false);
+      }
+
+      function loadAgentDashboard(agentId, preserveMessage) {
+        showStatus('Loading agent dashboard...', 'info');
+        callServer('getAgentDashboard', agentId, function (result) {
+          appState.currentDashboard = result;
+          renderDashboard(result);
+          if (!preserveMessage) {
+            showStatus('Agent dashboard refreshed.', 'success');
+          }
+        });
+      }
+
+      function renderDepartments(departments) {
+        var select = document.getElementById('departmentSelect');
+        select.innerHTML = '<option value="">Select a department</option>';
+
+        departments.forEach(function (department) {
+          var option = document.createElement('option');
+          option.value = department.departmentId;
+          option.textContent = department.departmentName || department.departmentId;
+          select.appendChild(option);
+        });
+      }
+
+      function renderAgents(agents) {
+        var select = document.getElementById('agentSelect');
+        select.innerHTML = '<option value="">Select an agent</option>';
+        select.disabled = !agents.length;
+
+        agents.forEach(function (agent) {
+          var option = document.createElement('option');
+          option.value = agent.agentId;
+          option.textContent = agent.name ? agent.name + ' (' + agent.agentId + ')' : agent.agentId;
+          select.appendChild(option);
+        });
+      }
+
+      function renderDashboard(dashboard) {
+        var summary = dashboard.summary || {};
+        var agent = dashboard.agent || {};
+
+        document.getElementById('summaryAgent').textContent = agent.name || agent.agentId || 'Unknown';
+        document.getElementById('summaryCoachingCount').textContent = String(summary.coachingCount || 0);
+        document.getElementById('summaryAverageScore').textContent = formatAverageScore(summary.averageScore);
+        document.getElementById('summaryLatestCoaching').textContent = summary.mostRecentCoaching || 'None';
+        document.getElementById('summaryLatestScore').textContent = summary.mostRecentScore || 'None';
+        document.getElementById('summaryLatestDispute').textContent = summary.mostRecentDispute || 'None';
+
+        renderAgentDetails(agent);
+        renderActionButtons();
+        renderHistory();
+      }
+
+      function renderAgentDetails(agent) {
+        var detailsContainer = document.getElementById('agentDetails');
+        var detailEntries = [
+          { label: 'Agent ID', value: agent.agentId || '' },
+          { label: 'Department', value: agent.departmentName || agent.departmentId || '' },
+          { label: 'Supervisor', value: agent.supervisor || '' },
+          { label: 'Start Date', value: agent.startDate || '' },
+          { label: 'Status', value: agent.status || '' }
+        ].filter(function (item) {
+          return item.value;
+        });
+
+        if (!detailEntries.length) {
+          detailsContainer.innerHTML =
+            '<div class="detail-item"><span>Status</span><strong>Select an agent to load details.</strong></div>';
+          return;
+        }
+
+        detailsContainer.innerHTML = detailEntries.map(function (item) {
+          return (
+            '<div class="detail-item">' +
+              '<span>' + escapeHtml(item.label) + '</span>' +
+              '<strong>' + escapeHtml(item.value) + '</strong>' +
+            '</div>'
+          );
+        }).join('');
+      }
+
+      function renderActionButtons() {
+        var disabled = !appState.selectedAgentId;
+        document.getElementById('addCoachingButton').disabled = disabled;
+        document.getElementById('addScoreButton').disabled = disabled;
+        document.getElementById('addDisputeButton').disabled = disabled;
+      }
+
+      function setActiveTab(tabName) {
+        appState.activeTab = tabName;
+        Array.prototype.slice.call(document.querySelectorAll('[data-tab]')).forEach(function (button) {
+          button.classList.toggle('active', button.getAttribute('data-tab') === tabName);
+        });
+        renderHistory();
+      }
+
+      function renderHistory() {
+        var historyContent = document.getElementById('historyContent');
+        var dashboard = appState.currentDashboard;
+
+        if (!dashboard || !dashboard.histories || !dashboard.histories[appState.activeTab]) {
+          historyContent.innerHTML = '<div class="empty-state">Select an agent to view history.</div>';
+          return;
+        }
+
+        var historyBlock = dashboard.histories[appState.activeTab];
+        var headers = historyBlock.headers || [];
+        var records = historyBlock.records || [];
+
+        if (!headers.length) {
+          historyContent.innerHTML =
+            '<div class="empty-state">The selected log sheet does not contain a header row yet.</div>';
+          return;
+        }
+
+        if (!records.length) {
+          historyContent.innerHTML = '<div class="empty-state">No records found for this agent.</div>';
+          return;
+        }
+
+        var tableHeader = headers.map(function (header) {
+          return '<th>' + escapeHtml(header) + '</th>';
+        }).join('');
+
+        var tableRows = records.map(function (record) {
+          var cells = headers.map(function (header) {
+            return '<td>' + escapeHtml(toDisplayString(record[header])) + '</td>';
+          }).join('');
+          return '<tr>' + cells + '</tr>';
+        }).join('');
+
+        historyContent.innerHTML =
+          '<div class="table-shell">' +
+            '<table>' +
+              '<thead><tr>' + tableHeader + '</tr></thead>' +
+              '<tbody>' + tableRows + '</tbody>' +
+            '</table>' +
+          '</div>';
+      }
+
+      function openModal(formType) {
+        if (!appState.selectedAgentId) {
+          showStatus('Select an agent before adding a new record.', 'error');
+          return;
+        }
+
+        var schema = getFormSchema(formType);
+        if (!schema || !(schema.fields || []).length) {
+          showStatus('The selected log sheet has no headers available for data entry.', 'error');
+          return;
+        }
+
+        appState.activeFormType = formType;
+        setModalSavingState(false);
+        document.getElementById('modalTitle').textContent = formConfig[formType].title;
+        document.getElementById('modalBody').innerHTML = buildFormMarkup(schema.fields);
+        document.getElementById('modalBackdrop').classList.add('open');
+      }
+
+      function closeModal() {
+        appState.activeFormType = '';
+        document.getElementById('recordForm').reset();
+        setModalSavingState(false);
+        document.getElementById('modalBackdrop').classList.remove('open');
+      }
+
+      function buildFormMarkup(fields) {
+        return fields.map(function (field) {
+          var value = field.readOnly ? appState.selectedAgentId : '';
+          var commonAttributes =
+            'name="' + escapeAttribute(field.name) + '" ' +
+            'data-label="' + escapeAttribute(field.label) + '" ' +
+            (field.readOnly ? 'readonly ' : '');
+
+          var inputMarkup = '';
+          if (field.type === 'textarea') {
+            inputMarkup = '<textarea ' + commonAttributes + '>' + escapeHtml(value) + '</textarea>';
+          } else {
+            inputMarkup =
+              '<input type="' + escapeAttribute(field.type) + '" ' +
+              'value="' + escapeAttribute(value) + '" ' +
+              commonAttributes +
+              '>';
+          }
+
+          return (
+            '<div class="field-group">' +
+              '<label>' + escapeHtml(field.label) + '</label>' +
+              inputMarkup +
+            '</div>'
+          );
+        }).join('');
+      }
+
+      function handleRecordSave(event) {
+        event.preventDefault();
+
+        var formType = appState.activeFormType;
+        var config = formConfig[formType];
+        if (!config) {
+          showStatus('The selected form type is not supported.', 'error');
+          return;
+        }
+
+        var schema = getFormSchema(formType);
+        var payload = {
+          agentId: appState.selectedAgentId,
+          values: collectFormValues(schema.fields || [])
+        };
+
+        setModalSavingState(true);
+        callServer(config.method, payload, function (result) {
+          closeModal();
+          showStatus(result.message || (config.title + ' saved successfully.'), 'success');
+          loadAgentDashboard(appState.selectedAgentId, true);
+        }, function () {
+          setModalSavingState(false);
+        });
+      }
+
+      function collectFormValues(fields) {
+        var values = {};
+        fields.forEach(function (field) {
+          var element = document.getElementsByName(field.name)[0];
+          if (element) {
+            values[field.name] = element.value;
+          }
+        });
+        return values;
+      }
+
+      function setModalSavingState(isSaving) {
+        document.getElementById('saveModalButton').disabled = isSaving;
+        document.getElementById('cancelModalButton').disabled = isSaving;
+        document.getElementById('closeModalButton').disabled = isSaving;
+        document.getElementById('saveModalButton').textContent = isSaving ? 'Saving...' : 'Save';
+      }
+
+      function getFormSchema(formType) {
+        return appState.initialData && appState.initialData.forms
+          ? appState.initialData.forms[formType]
+          : null;
+      }
+
+      function resetDashboard() {
+        document.getElementById('summaryAgent').textContent = 'None selected';
+        document.getElementById('summaryCoachingCount').textContent = '0';
+        document.getElementById('summaryAverageScore').textContent = 'N/A';
+        document.getElementById('summaryLatestCoaching').textContent = 'None';
+        document.getElementById('summaryLatestScore').textContent = 'None';
+        document.getElementById('summaryLatestDispute').textContent = 'None';
+        renderAgentDetails({});
+        renderActionButtons();
+        renderHistory();
+      }
+
+      function callServer(methodName, payload, onSuccess, onFailure) {
+        var runner = google.script.run
+          .withSuccessHandler(function (result) {
+            if (!result || result.success === false) {
+              showStatus((result && result.message) || 'An unexpected server error occurred.', 'error');
+              if (typeof onFailure === 'function') {
+                onFailure(result);
+              }
+              return;
+            }
+
+            if (typeof onSuccess === 'function') {
+              onSuccess(result);
+            }
+          })
+          .withFailureHandler(function (error) {
+            showStatus(error && error.message ? error.message : 'Unable to complete the request.', 'error');
+            if (typeof onFailure === 'function') {
+              onFailure(error);
+            }
+          });
+
+        if (typeof payload === 'undefined') {
+          runner[methodName]();
+        } else {
+          runner[methodName](payload);
+        }
+      }
+
+      function showStatus(message, type) {
+        var banner = document.getElementById('statusBanner');
+        banner.textContent = message;
+        banner.className = 'status-banner visible ' + (type || 'info');
+      }
+
+      function formatAverageScore(value) {
+        if (value === null || value === undefined || value === '') {
+          return 'N/A';
+        }
+
+        return Number(value).toFixed(2);
+      }
+
+      function toDisplayString(value) {
+        if (value === null || value === undefined || value === '') {
+          return '';
+        }
+        return String(value);
+      }
+
+      function escapeHtml(value) {
+        return toDisplayString(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function escapeAttribute(value) {
+        return escapeHtml(value);
+      }
+    </script>
+  </body>
+</html>
