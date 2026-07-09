@@ -15,7 +15,23 @@ var Tracker = (function () {
     name: 'Name',
     supervisor: 'Supervisor',
     startDate: 'Start Date',
-    status: 'Status'
+    status: 'Status',
+    coachingId: 'Coaching ID',
+    disputeId: 'Dispute ID'
+  };
+
+  // Auto-generated ID columns, keyed by sheet. Add more here if other logs
+  // ever need the same behaviour.
+  var ID_GENERATION_CONFIG = {};
+  ID_GENERATION_CONFIG[SHEETS.coachingLog] = {
+    header: FIELD_NAMES.coachingId,
+    prefix: 'COA-',
+    padLength: 6
+  };
+  ID_GENERATION_CONFIG[SHEETS.disputeLog] = {
+    header: FIELD_NAMES.disputeId,
+    prefix: 'DIS-',
+    padLength: 6
   };
 
   function getInitialData() {
@@ -47,9 +63,11 @@ var Tracker = (function () {
       success: true,
       departments: departments,
       forms: {
-        coaching: buildFormDefinition(coachingData.headers),
+        // Coaching ID and Dispute ID are system-generated, so they're excluded
+        // from the editable form fields entirely (not just made read-only).
+        coaching: buildFormDefinition(coachingData.headers, [FIELD_NAMES.coachingId]),
         score: buildFormDefinition(scoreData.headers),
-        dispute: buildFormDefinition(disputeData.headers)
+        dispute: buildFormDefinition(disputeData.headers, [FIELD_NAMES.disputeId])
       }
     };
   }
@@ -160,7 +178,7 @@ var Tracker = (function () {
   }
 
   function saveCoaching(payload) {
-    return saveLogEntry(SHEETS.coachingLog, 'Coaching', payload);
+    return saveLogEntry(SHEETS.coachingLog, 'Coaching', payload, ID_GENERATION_CONFIG[SHEETS.coachingLog]);
   }
 
   function saveScore(payload) {
@@ -168,10 +186,12 @@ var Tracker = (function () {
   }
 
   function saveDispute(payload) {
-    return saveLogEntry(SHEETS.disputeLog, 'Dispute', payload);
+    return saveLogEntry(SHEETS.disputeLog, 'Dispute', payload, ID_GENERATION_CONFIG[SHEETS.disputeLog]);
   }
 
-  function saveLogEntry(sheetName, label, payload) {
+  // idConfig is optional: { header, prefix, padLength }. When provided, the
+  // matching column is always system-generated and never taken from the client.
+  function saveLogEntry(sheetName, label, payload, idConfig) {
     var data = readSheet(sheetName);
     var values = payload && payload.values ? payload.values : {};
     var agentId = toSafeString(payload && payload.agentId ? payload.agentId : getPayloadValue(values, FIELD_NAMES.agentId));
@@ -191,17 +211,28 @@ var Tracker = (function () {
 
     validateAgentExists(agentId);
 
+    var generatedId = null;
+    if (idConfig && findHeader(data.headers, [idConfig.header])) {
+      generatedId = generateNextSequentialId(data.rows, [idConfig.header], idConfig.prefix, idConfig.padLength);
+    }
+
     var hasUserEnteredValue = false;
     // Build the append row from the live header row so column order is never hardcoded.
     var rowToAppend = data.headers.map(function (header) {
+      var isAgentIdColumn = normalizeHeader(header) === normalizeHeader(FIELD_NAMES.agentId);
+      var isGeneratedIdColumn = idConfig && generatedId !== null &&
+        normalizeHeader(header) === normalizeHeader(idConfig.header);
       var rawValue;
-      if (normalizeHeader(header) === normalizeHeader(FIELD_NAMES.agentId)) {
+
+      if (isAgentIdColumn) {
         rawValue = agentId;
+      } else if (isGeneratedIdColumn) {
+        rawValue = generatedId;
       } else {
         rawValue = getPayloadValue(values, header);
       }
 
-      if (!isEmptyValue(rawValue) && normalizeHeader(header) !== normalizeHeader(FIELD_NAMES.agentId)) {
+      if (!isEmptyValue(rawValue) && !isAgentIdColumn && !isGeneratedIdColumn) {
         hasUserEnteredValue = true;
       }
 
@@ -216,7 +247,9 @@ var Tracker = (function () {
 
     return {
       success: true,
-      message: label + ' saved successfully.'
+      message: generatedId
+        ? label + ' saved successfully (' + generatedId + ').'
+        : label + ' saved successfully.'
     };
   }
 
@@ -232,6 +265,34 @@ var Tracker = (function () {
     return rows.filter(function (row) {
       return toSafeString(getFieldValue(row, [FIELD_NAMES.agentId])) === agentId;
     });
+  }
+
+  // Finds the highest existing numeric suffix for the given ID column across
+  // all rows, and returns the next ID as prefix + zero-padded(number + 1).
+  // If no existing IDs are found, generation starts at 1.
+  function generateNextSequentialId(rows, headerCandidates, prefix, padLength) {
+    var maxNumber = 0;
+
+    rows.forEach(function (row) {
+      var rawValue = toSafeString(getFieldValue(row, headerCandidates));
+      var match = rawValue.match(/(\d+)\s*$/);
+      if (match) {
+        var numericPart = parseInt(match[1], 10);
+        if (!isNaN(numericPart) && numericPart > maxNumber) {
+          maxNumber = numericPart;
+        }
+      }
+    });
+
+    return prefix + padNumber(maxNumber + 1, padLength);
+  }
+
+  function padNumber(number, length) {
+    var numberString = String(number);
+    while (numberString.length < length) {
+      numberString = '0' + numberString;
+    }
+    return numberString;
   }
 
   function calculateAverageScore(rows) {
@@ -342,17 +403,26 @@ var Tracker = (function () {
     };
   }
 
-  function buildFormDefinition(headers) {
+  // hiddenHeaderNames (optional): headers to exclude from the editable
+  // "fields" list entirely (used for system-generated ID columns). They
+  // remain in "headers" so history tables still display them.
+  function buildFormDefinition(headers, hiddenHeaderNames) {
+    var normalizedHidden = (hiddenHeaderNames || []).map(normalizeHeader);
+
     return {
       headers: headers,
-      fields: headers.map(function (header) {
-        return {
-          name: header,
-          label: header,
-          type: inferInputType(header),
-          readOnly: normalizeHeader(header) === normalizeHeader(FIELD_NAMES.agentId)
-        };
-      })
+      fields: headers
+        .filter(function (header) {
+          return normalizedHidden.indexOf(normalizeHeader(header)) === -1;
+        })
+        .map(function (header) {
+          return {
+            name: header,
+            label: header,
+            type: inferInputType(header),
+            readOnly: normalizeHeader(header) === normalizeHeader(FIELD_NAMES.agentId)
+          };
+        })
     };
   }
 
