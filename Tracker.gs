@@ -3,7 +3,7 @@ var Tracker = (function () {
     departments: 'Departments',
     agents: 'Agents',
     coachingLog: 'Coaching Log',
-    scoreLog: 'Score Log',
+    performanceLog: 'Performance Log',
     disputeLog: 'Dispute Log'
   };
 
@@ -17,11 +17,23 @@ var Tracker = (function () {
     startDate: 'Start Date',
     status: 'Status',
     coachingId: 'Coaching ID',
-    disputeId: 'Dispute ID'
+    disputeId: 'Dispute ID',
+    performanceId: 'Performance ID',
+    weekEnding: 'Week Ending',
+    qaStream: 'QA Stream',
+    averageScore: 'Average Score',
+    numberOfAudits: 'Number of Audits',
+    primaryRootCause: 'Primary Root Cause',
+    qaSummary: 'QA Summary',
+    date: 'Date',
+    disputeStatus: 'Dispute Status'
   };
 
-  // Auto-generated ID columns, keyed by sheet. Add more here if other logs
-  // ever need the same behaviour.
+  var QA_STREAM_OPTIONS = ['Customer Voice', 'Customer Text', 'Clerk Support', 'D2C'];
+
+  var RESOLVED_DISPUTE_STATUSES = ['resolved', 'closed', 'completed'];
+
+  // Auto-generated ID columns, keyed by sheet.
   var ID_GENERATION_CONFIG = {};
   ID_GENERATION_CONFIG[SHEETS.coachingLog] = {
     header: FIELD_NAMES.coachingId,
@@ -33,11 +45,16 @@ var Tracker = (function () {
     prefix: 'DIS-',
     padLength: 6
   };
+  ID_GENERATION_CONFIG[SHEETS.performanceLog] = {
+    header: FIELD_NAMES.performanceId,
+    prefix: 'PERF-',
+    padLength: 6
+  };
 
   function getInitialData() {
     var departmentData = readSheet(SHEETS.departments);
     var coachingData = readSheet(SHEETS.coachingLog);
-    var scoreData = readSheet(SHEETS.scoreLog);
+    var performanceData = readSheet(SHEETS.performanceLog);
     var disputeData = readSheet(SHEETS.disputeLog);
     var activeHeader = findHeader(departmentData.headers, [FIELD_NAMES.active]);
 
@@ -63,10 +80,11 @@ var Tracker = (function () {
       success: true,
       departments: departments,
       forms: {
-        // Coaching ID and Dispute ID are system-generated, so they're excluded
-        // from the editable form fields entirely (not just made read-only).
+        // Agent ID, Name, and the exact "Date" column are auto-managed
+        // server-side and hidden automatically. Coaching/Dispute/Performance
+        // IDs are system-generated, so they're hidden explicitly here.
         coaching: buildFormDefinition(coachingData.headers, [FIELD_NAMES.coachingId]),
-        score: buildFormDefinition(scoreData.headers),
+        performance: buildFormDefinition(performanceData.headers, [FIELD_NAMES.performanceId]),
         dispute: buildFormDefinition(disputeData.headers, [FIELD_NAMES.disputeId])
       }
     };
@@ -122,7 +140,7 @@ var Tracker = (function () {
     var departmentData = readSheet(SHEETS.departments);
     var agentData = readSheet(SHEETS.agents);
     var coachingData = readSheet(SHEETS.coachingLog);
-    var scoreData = readSheet(SHEETS.scoreLog);
+    var performanceData = readSheet(SHEETS.performanceLog);
     var disputeData = readSheet(SHEETS.disputeLog);
 
     var agentRow = findRowByField(agentData.rows, FIELD_NAMES.agentId, requestedAgentId);
@@ -138,8 +156,12 @@ var Tracker = (function () {
 
     // Each log is read once per request, then filtered in memory for the selected agent.
     var coachingRows = filterRowsByAgentId(coachingData.rows, requestedAgentId);
-    var scoreRows = filterRowsByAgentId(scoreData.rows, requestedAgentId);
+    var performanceRows = filterRowsByAgentId(performanceData.rows, requestedAgentId);
     var disputeRows = filterRowsByAgentId(disputeData.rows, requestedAgentId);
+
+    var performanceByStream = computePerformanceByStream(performanceRows);
+    var overallAveragePerformance = computeOverallAverage(performanceByStream);
+    var openDisputeCount = countOpenDisputes(disputeRows);
 
     return {
       success: true,
@@ -155,19 +177,21 @@ var Tracker = (function () {
       },
       summary: {
         coachingCount: coachingRows.length,
-        averageScore: calculateAverageScore(scoreRows),
+        overallAveragePerformance: overallAveragePerformance,
+        performanceByStream: performanceByStream,
         mostRecentCoaching: getMostRecentDateLabel(coachingRows),
-        mostRecentScore: getMostRecentDateLabel(scoreRows),
-        mostRecentDispute: getMostRecentDateLabel(disputeRows)
+        mostRecentPerformance: getMostRecentDateLabel(performanceRows),
+        mostRecentDispute: getMostRecentDateLabel(disputeRows),
+        openDisputeCount: openDisputeCount
       },
       histories: {
         coaching: {
           headers: coachingData.headers,
           records: serializeRecords(coachingData.headers, coachingRows)
         },
-        score: {
-          headers: scoreData.headers,
-          records: serializeRecords(scoreData.headers, scoreRows)
+        performance: {
+          headers: performanceData.headers,
+          records: serializeRecords(performanceData.headers, performanceRows)
         },
         dispute: {
           headers: disputeData.headers,
@@ -181,8 +205,8 @@ var Tracker = (function () {
     return saveLogEntry(SHEETS.coachingLog, 'Coaching', payload, ID_GENERATION_CONFIG[SHEETS.coachingLog]);
   }
 
-  function saveScore(payload) {
-    return saveLogEntry(SHEETS.scoreLog, 'Score', payload);
+  function savePerformance(payload) {
+    return saveLogEntry(SHEETS.performanceLog, 'Performance', payload, ID_GENERATION_CONFIG[SHEETS.performanceLog]);
   }
 
   function saveDispute(payload) {
@@ -209,7 +233,9 @@ var Tracker = (function () {
       throw new Error('Agent ID is required before saving to ' + sheetName + '.');
     }
 
-    validateAgentExists(agentId);
+    var agentRow = getAgentRowOrThrow(agentId);
+    var agentName = toSafeString(getFieldValue(agentRow, [FIELD_NAMES.name]));
+    var today = new Date();
 
     var generatedId = null;
     if (idConfig && findHeader(data.headers, [idConfig.header])) {
@@ -220,19 +246,26 @@ var Tracker = (function () {
     // Build the append row from the live header row so column order is never hardcoded.
     var rowToAppend = data.headers.map(function (header) {
       var isAgentIdColumn = normalizeHeader(header) === normalizeHeader(FIELD_NAMES.agentId);
+      var isNameColumn = normalizeHeader(header) === normalizeHeader(FIELD_NAMES.name);
+      var isAutoFillDate = isAutoFillDateHeader(header);
       var isGeneratedIdColumn = idConfig && generatedId !== null &&
         normalizeHeader(header) === normalizeHeader(idConfig.header);
+      var isAutoFilled = isAgentIdColumn || isNameColumn || isAutoFillDate || isGeneratedIdColumn;
       var rawValue;
 
       if (isAgentIdColumn) {
         rawValue = agentId;
+      } else if (isNameColumn) {
+        rawValue = agentName;
+      } else if (isAutoFillDate) {
+        rawValue = today;
       } else if (isGeneratedIdColumn) {
         rawValue = generatedId;
       } else {
         rawValue = getPayloadValue(values, header);
       }
 
-      if (!isEmptyValue(rawValue) && !isAgentIdColumn && !isGeneratedIdColumn) {
+      if (!isEmptyValue(rawValue) && !isAutoFilled) {
         hasUserEnteredValue = true;
       }
 
@@ -253,18 +286,113 @@ var Tracker = (function () {
     };
   }
 
-  function validateAgentExists(agentId) {
+  function getAgentRowOrThrow(agentId) {
     var agentData = readSheet(SHEETS.agents);
     var agentRow = findRowByField(agentData.rows, FIELD_NAMES.agentId, agentId);
     if (!agentRow) {
       throw new Error('The selected Agent ID does not exist in the Agents sheet.');
     }
+    return agentRow;
   }
 
   function filterRowsByAgentId(rows, agentId) {
     return rows.filter(function (row) {
       return toSafeString(getFieldValue(row, [FIELD_NAMES.agentId])) === agentId;
     });
+  }
+
+  // Groups performance rows by QA Stream and returns the most recent
+  // (by Week Ending) snapshot for each of the four fixed streams, so the
+  // dashboard can always render all streams even if some have no data yet.
+  function computePerformanceByStream(rows) {
+    return QA_STREAM_OPTIONS.map(function (streamName) {
+      var streamRows = rows.filter(function (row) {
+        return toSafeString(getFieldValue(row, [FIELD_NAMES.qaStream])) === streamName;
+      });
+
+      if (!streamRows.length) {
+        return {
+          qaStream: streamName,
+          hasData: false
+        };
+      }
+
+      var latestRow = streamRows.reduce(function (latest, row) {
+        var latestDate = parseDate(getFieldValue(latest, [FIELD_NAMES.weekEnding]));
+        var candidateDate = parseDate(getFieldValue(row, [FIELD_NAMES.weekEnding]));
+        if (!latestDate) {
+          return row;
+        }
+        if (candidateDate && candidateDate.getTime() > latestDate.getTime()) {
+          return row;
+        }
+        return latest;
+      });
+
+      return {
+        qaStream: streamName,
+        hasData: true,
+        weekEnding: serializeValue(getFieldValue(latestRow, [FIELD_NAMES.weekEnding])),
+        averageScore: toNumber(getFieldValue(latestRow, [FIELD_NAMES.averageScore])),
+        numberOfAudits: toNumber(getFieldValue(latestRow, [FIELD_NAMES.numberOfAudits])),
+        primaryRootCause: toSafeString(getFieldValue(latestRow, [FIELD_NAMES.primaryRootCause]))
+      };
+    });
+  }
+
+  // Weighted average of each stream's latest Average Score, weighted by
+  // Number of Audits. Falls back to a simple average if weights are missing.
+  function computeOverallAverage(performanceByStream) {
+    var streamsWithScores = performanceByStream.filter(function (stream) {
+      return stream.hasData && typeof stream.averageScore === 'number' && !isNaN(stream.averageScore);
+    });
+
+    if (!streamsWithScores.length) {
+      return null;
+    }
+
+    var totalWeight = streamsWithScores.reduce(function (sum, stream) {
+      return sum + (typeof stream.numberOfAudits === 'number' && !isNaN(stream.numberOfAudits) ? stream.numberOfAudits : 0);
+    }, 0);
+
+    if (totalWeight > 0) {
+      var weightedSum = streamsWithScores.reduce(function (sum, stream) {
+        var weight = typeof stream.numberOfAudits === 'number' && !isNaN(stream.numberOfAudits) ? stream.numberOfAudits : 0;
+        return sum + (stream.averageScore * weight);
+      }, 0);
+      return roundNumber(weightedSum / totalWeight, 2);
+    }
+
+    var simpleSum = streamsWithScores.reduce(function (sum, stream) {
+      return sum + stream.averageScore;
+    }, 0);
+    return roundNumber(simpleSum / streamsWithScores.length, 2);
+  }
+
+  // Counts disputes not marked resolved/closed. Looks for a "Dispute Status"
+  // or "Status" column; returns null (meaning "unknown") if neither exists,
+  // rather than guessing.
+  function countOpenDisputes(rows) {
+    if (!rows.length) {
+      return 0;
+    }
+
+    var statusHeaderCandidates = [FIELD_NAMES.disputeStatus, FIELD_NAMES.status];
+    var hasStatusColumn = rows.some(function (row) {
+      return Object.keys(row).some(function (key) {
+        return key.charAt(0) !== '_' &&
+          statusHeaderCandidates.map(normalizeHeader).indexOf(normalizeHeader(key)) !== -1;
+      });
+    });
+
+    if (!hasStatusColumn) {
+      return null;
+    }
+
+    return rows.filter(function (row) {
+      var statusValue = toSafeString(getFieldValue(row, statusHeaderCandidates)).toLowerCase();
+      return RESOLVED_DISPUTE_STATUSES.indexOf(statusValue) === -1;
+    }).length;
   }
 
   // Finds the highest existing numeric suffix for the given ID column across
@@ -293,53 +421,6 @@ var Tracker = (function () {
       numberString = '0' + numberString;
     }
     return numberString;
-  }
-
-  function calculateAverageScore(rows) {
-    var numericScores = rows
-      .map(function (row) {
-        return getScoreValue(row);
-      })
-      .filter(function (value) {
-        return typeof value === 'number' && !isNaN(value);
-      });
-
-    if (!numericScores.length) {
-      return null;
-    }
-
-    var total = numericScores.reduce(function (sum, value) {
-      return sum + value;
-    }, 0);
-
-    return roundNumber(total / numericScores.length, 2);
-  }
-
-  function getScoreValue(row) {
-    var keys = Object.keys(row).filter(function (key) {
-      return key.charAt(0) !== '_';
-    });
-
-    var preferredKey = keys.find(function (key) {
-      return /score/i.test(key);
-    });
-
-    if (preferredKey) {
-      return toNumber(row[preferredKey]);
-    }
-
-    for (var i = 0; i < keys.length; i += 1) {
-      if (normalizeHeader(keys[i]) === normalizeHeader(FIELD_NAMES.agentId)) {
-        continue;
-      }
-
-      var numericValue = toNumber(row[keys[i]]);
-      if (typeof numericValue === 'number' && !isNaN(numericValue)) {
-        return numericValue;
-      }
-    }
-
-    return null;
   }
 
   function getMostRecentDateLabel(rows) {
@@ -403,9 +484,23 @@ var Tracker = (function () {
     };
   }
 
-  // hiddenHeaderNames (optional): headers to exclude from the editable
-  // "fields" list entirely (used for system-generated ID columns). They
-  // remain in "headers" so history tables still display them.
+  // Any header the server fills in automatically and that the user should
+  // never see or edit: Agent ID, Name, and the exact "Date" column (not
+  // "Follow-up Date", "Week Ending", or any other date-like header).
+  function isAutoManagedHeader(header) {
+    return normalizeHeader(header) === normalizeHeader(FIELD_NAMES.agentId) ||
+      normalizeHeader(header) === normalizeHeader(FIELD_NAMES.name) ||
+      isAutoFillDateHeader(header);
+  }
+
+  function isAutoFillDateHeader(header) {
+    return normalizeHeader(header) === normalizeHeader(FIELD_NAMES.date);
+  }
+
+  // hiddenHeaderNames (optional): additional headers to exclude from the
+  // editable "fields" list (used for system-generated ID columns). Headers
+  // matching isAutoManagedHeader are always hidden. All headers remain in
+  // "headers" so history tables still display every column.
   function buildFormDefinition(headers, hiddenHeaderNames) {
     var normalizedHidden = (hiddenHeaderNames || []).map(normalizeHeader);
 
@@ -413,20 +508,32 @@ var Tracker = (function () {
       headers: headers,
       fields: headers
         .filter(function (header) {
-          return normalizedHidden.indexOf(normalizeHeader(header)) === -1;
+          return !isAutoManagedHeader(header) &&
+            normalizedHidden.indexOf(normalizeHeader(header)) === -1;
         })
         .map(function (header) {
-          return {
+          var type = inferInputType(header);
+          var field = {
             name: header,
             label: header,
-            type: inferInputType(header),
-            readOnly: normalizeHeader(header) === normalizeHeader(FIELD_NAMES.agentId)
+            type: type,
+            readOnly: false
           };
+
+          if (type === 'select') {
+            field.options = getSelectOptions(header);
+          }
+
+          return field;
         })
     };
   }
 
   function inferInputType(header) {
+    if (normalizeHeader(header) === normalizeHeader(FIELD_NAMES.qaStream)) {
+      return 'select';
+    }
+
     if (/date/i.test(header)) {
       return 'date';
     }
@@ -440,6 +547,13 @@ var Tracker = (function () {
     }
 
     return 'text';
+  }
+
+  function getSelectOptions(header) {
+    if (normalizeHeader(header) === normalizeHeader(FIELD_NAMES.qaStream)) {
+      return QA_STREAM_OPTIONS;
+    }
+    return [];
   }
 
   function findRowByField(rows, fieldName, expectedValue) {
@@ -538,7 +652,7 @@ var Tracker = (function () {
       }
     }
 
-    if (/score|points|rating/i.test(header)) {
+    if (/score|points|rating|audits/i.test(header)) {
       var numericValue = toNumber(value);
       if (typeof numericValue === 'number' && !isNaN(numericValue)) {
         return numericValue;
@@ -640,7 +754,7 @@ var Tracker = (function () {
     getAgentsByDepartment: getAgentsByDepartment,
     getAgentDashboard: getAgentDashboard,
     saveCoaching: saveCoaching,
-    saveScore: saveScore,
+    savePerformance: savePerformance,
     saveDispute: saveDispute
   };
 })();
