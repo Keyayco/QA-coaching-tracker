@@ -3,7 +3,7 @@
   <head>
     <base target="_top">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Coaching Tracker</title>
+    <title>QA Performance Management System</title>
     <style>
       :root {
         --bg: #f3f6fb;
@@ -67,7 +67,8 @@
       .controls-grid,
       .summary-grid,
       .detail-grid,
-      .actions-row {
+      .actions-row,
+      .stream-grid {
         display: grid;
         gap: 16px;
       }
@@ -131,6 +132,7 @@
       }
 
       .summary-panel,
+      .stream-panel,
       .history-panel {
         padding: 20px;
         margin-bottom: 16px;
@@ -162,6 +164,39 @@
 
       .summary-card strong {
         font-size: 20px;
+      }
+
+      .stream-grid {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+
+      .stream-card {
+        padding: 16px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--surface-alt);
+      }
+
+      .stream-card h3 {
+        margin: 0 0 10px;
+        font-size: 15px;
+      }
+
+      .stream-card .stream-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 13px;
+        margin-bottom: 6px;
+        color: var(--muted);
+      }
+
+      .stream-card .stream-row strong {
+        color: var(--text);
+      }
+
+      .stream-card.no-data {
+        color: var(--muted);
+        font-style: italic;
       }
 
       .detail-grid {
@@ -342,8 +377,8 @@
   <body>
     <div class="app-shell">
       <header class="app-header">
-        <h1>Coaching Tracker</h1>
-        <p>Google Sheets remains the only permanent source of truth. Dashboard metrics are calculated in memory only.</p>
+        <h1>QA Performance Management System</h1>
+        <p>Google Sheets remains the only permanent source of truth. Dashboard metrics are calculated in memory only. Individual audits stay in Zendesk, Talkdesk, and D2C — this app tracks weekly consolidated performance, coaching, and disputes.</p>
       </header>
 
       <div id="statusBanner" class="status-banner"></div>
@@ -369,11 +404,11 @@
         <h2 class="panel-title">Agent Summary</h2>
         <div class="summary-grid" id="summaryGrid">
           <div class="summary-card"><span>Agent</span><strong id="summaryAgent">None selected</strong></div>
+          <div class="summary-card"><span>Overall Avg Performance</span><strong id="summaryOverallAverage">N/A</strong></div>
           <div class="summary-card"><span>Coaching Count</span><strong id="summaryCoachingCount">0</strong></div>
-          <div class="summary-card"><span>Average Score</span><strong id="summaryAverageScore">N/A</strong></div>
           <div class="summary-card"><span>Latest Coaching</span><strong id="summaryLatestCoaching">None</strong></div>
-          <div class="summary-card"><span>Latest Score</span><strong id="summaryLatestScore">None</strong></div>
-          <div class="summary-card"><span>Latest Dispute</span><strong id="summaryLatestDispute">None</strong></div>
+          <div class="summary-card"><span>Latest Performance</span><strong id="summaryLatestPerformance">None</strong></div>
+          <div class="summary-card"><span>Open Disputes</span><strong id="summaryOpenDisputes">N/A</strong></div>
         </div>
 
         <div class="detail-grid" id="agentDetails">
@@ -384,16 +419,23 @@
         </div>
       </section>
 
+      <section class="panel stream-panel">
+        <h2 class="panel-title">Performance by QA Stream</h2>
+        <div class="stream-grid" id="streamGrid">
+          <div class="stream-card no-data">Select an agent to load performance by stream.</div>
+        </div>
+      </section>
+
       <section class="panel history-panel">
         <div class="actions-row">
           <button id="addCoachingButton" class="action-button" data-form-type="coaching" disabled>Add Coaching</button>
-          <button id="addScoreButton" class="action-button" data-form-type="score" disabled>Add Score</button>
+          <button id="addPerformanceButton" class="action-button" data-form-type="performance" disabled>Add Performance</button>
           <button id="addDisputeButton" class="action-button" data-form-type="dispute" disabled>Add Dispute</button>
         </div>
 
         <div class="tabs">
           <button class="tab-button active" data-tab="coaching">Coaching History</button>
-          <button class="tab-button" data-tab="score">Score History</button>
+          <button class="tab-button" data-tab="performance">Performance History</button>
           <button class="tab-button" data-tab="dispute">Disputes</button>
         </div>
 
@@ -433,9 +475,9 @@
           title: 'Add Coaching',
           method: 'saveCoaching'
         },
-        score: {
-          title: 'Add Score',
-          method: 'saveScore'
+        performance: {
+          title: 'Add Performance',
+          method: 'savePerformance'
         },
         dispute: {
           title: 'Add Dispute',
@@ -515,7 +557,7 @@
 
         if (!appState.selectedAgentId) {
           resetDashboard();
-          showStatus('Select an agent to load coaching, score, and dispute data.', 'info');
+          showStatus('Select an agent to load performance, coaching, and dispute data.', 'info');
           return;
         }
 
@@ -563,15 +605,49 @@
         var agent = dashboard.agent || {};
 
         document.getElementById('summaryAgent').textContent = agent.name || agent.agentId || 'Unknown';
+        document.getElementById('summaryOverallAverage').textContent = formatScoreValue(summary.overallAveragePerformance);
         document.getElementById('summaryCoachingCount').textContent = String(summary.coachingCount || 0);
-        document.getElementById('summaryAverageScore').textContent = formatAverageScore(summary.averageScore);
         document.getElementById('summaryLatestCoaching').textContent = summary.mostRecentCoaching || 'None';
-        document.getElementById('summaryLatestScore').textContent = summary.mostRecentScore || 'None';
-        document.getElementById('summaryLatestDispute').textContent = summary.mostRecentDispute || 'None';
+        document.getElementById('summaryLatestPerformance').textContent = summary.mostRecentPerformance || 'None';
+        document.getElementById('summaryOpenDisputes').textContent =
+          summary.openDisputeCount === null || summary.openDisputeCount === undefined
+            ? 'N/A'
+            : String(summary.openDisputeCount);
 
         renderAgentDetails(agent);
+        renderStreamGrid(summary.performanceByStream || []);
         renderActionButtons();
         renderHistory();
+      }
+
+      function renderStreamGrid(streams) {
+        var streamGrid = document.getElementById('streamGrid');
+
+        if (!streams.length) {
+          streamGrid.innerHTML = '<div class="stream-card no-data">Select an agent to load performance by stream.</div>';
+          return;
+        }
+
+        streamGrid.innerHTML = streams.map(function (stream) {
+          if (!stream.hasData) {
+            return (
+              '<div class="stream-card no-data">' +
+                '<h3>' + escapeHtml(stream.qaStream) + '</h3>' +
+                'No performance data yet.' +
+              '</div>'
+            );
+          }
+
+          return (
+            '<div class="stream-card">' +
+              '<h3>' + escapeHtml(stream.qaStream) + '</h3>' +
+              '<div class="stream-row"><span>Week Ending</span><strong>' + escapeHtml(stream.weekEnding || '') + '</strong></div>' +
+              '<div class="stream-row"><span>Avg Score</span><strong>' + escapeHtml(formatScoreValue(stream.averageScore)) + '</strong></div>' +
+              '<div class="stream-row"><span>Audits</span><strong>' + escapeHtml(toDisplayString(stream.numberOfAudits)) + '</strong></div>' +
+              '<div class="stream-row"><span>Root Cause</span><strong>' + escapeHtml(stream.primaryRootCause || 'N/A') + '</strong></div>' +
+            '</div>'
+          );
+        }).join('');
       }
 
       function renderAgentDetails(agent) {
@@ -605,7 +681,7 @@
       function renderActionButtons() {
         var disabled = !appState.selectedAgentId;
         document.getElementById('addCoachingButton').disabled = disabled;
-        document.getElementById('addScoreButton').disabled = disabled;
+        document.getElementById('addPerformanceButton').disabled = disabled;
         document.getElementById('addDisputeButton').disabled = disabled;
       }
 
@@ -689,19 +765,23 @@
 
       function buildFormMarkup(fields) {
         return fields.map(function (field) {
-          var value = field.readOnly ? appState.selectedAgentId : '';
           var commonAttributes =
             'name="' + escapeAttribute(field.name) + '" ' +
-            'data-label="' + escapeAttribute(field.label) + '" ' +
-            (field.readOnly ? 'readonly ' : '');
+            'data-label="' + escapeAttribute(field.label) + '" ';
 
           var inputMarkup = '';
           if (field.type === 'textarea') {
-            inputMarkup = '<textarea ' + commonAttributes + '>' + escapeHtml(value) + '</textarea>';
+            inputMarkup = '<textarea ' + commonAttributes + '></textarea>';
+          } else if (field.type === 'select') {
+            var optionsMarkup = '<option value="">Select ' + escapeHtml(field.label) + '</option>' +
+              (field.options || []).map(function (optionValue) {
+                return '<option value="' + escapeAttribute(optionValue) + '">' + escapeHtml(optionValue) + '</option>';
+              }).join('');
+            inputMarkup = '<select ' + commonAttributes + '>' + optionsMarkup + '</select>';
           } else {
             inputMarkup =
               '<input type="' + escapeAttribute(field.type) + '" ' +
-              'value="' + escapeAttribute(value) + '" ' +
+              'value="" ' +
               commonAttributes +
               '>';
           }
@@ -767,12 +847,13 @@
 
       function resetDashboard() {
         document.getElementById('summaryAgent').textContent = 'None selected';
+        document.getElementById('summaryOverallAverage').textContent = 'N/A';
         document.getElementById('summaryCoachingCount').textContent = '0';
-        document.getElementById('summaryAverageScore').textContent = 'N/A';
         document.getElementById('summaryLatestCoaching').textContent = 'None';
-        document.getElementById('summaryLatestScore').textContent = 'None';
-        document.getElementById('summaryLatestDispute').textContent = 'None';
+        document.getElementById('summaryLatestPerformance').textContent = 'None';
+        document.getElementById('summaryOpenDisputes').textContent = 'N/A';
         renderAgentDetails({});
+        renderStreamGrid([]);
         renderActionButtons();
         renderHistory();
       }
@@ -812,7 +893,7 @@
         banner.className = 'status-banner visible ' + (type || 'info');
       }
 
-      function formatAverageScore(value) {
+      function formatScoreValue(value) {
         if (value === null || value === undefined || value === '') {
           return 'N/A';
         }
