@@ -1,6 +1,6 @@
 function doGet() {
   return HtmlService.createHtmlOutputFromFile('Index')
-    .setTitle('Coaching Tracker')
+    .setTitle('QA Performance Management System')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
@@ -28,9 +28,9 @@ function saveCoaching(payload) {
   });
 }
 
-function saveScore(payload) {
+function savePerformance(payload) {
   return runSafely(function () {
-    return Tracker.saveScore(payload);
+    return Tracker.savePerformance(payload);
   });
 }
 
