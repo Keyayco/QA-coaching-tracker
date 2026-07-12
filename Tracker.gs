@@ -26,12 +26,17 @@ var Tracker = (function () {
     primaryRootCause: 'Primary Root Cause',
     qaSummary: 'QA Summary',
     date: 'Date',
-    disputeStatus: 'Dispute Status'
+    disputeStatus: 'Dispute Status',
+    followUpDate: 'Follow-up Date',
+    followUpCompleted: 'Follow-up Completed'
   };
 
   var QA_STREAM_OPTIONS = ['Customer Voice', 'Customer Text', 'Clerk Support', 'D2C'];
 
   var RESOLVED_DISPUTE_STATUSES = ['resolved', 'closed', 'completed'];
+
+  var TOP_LIST_SIZE = 3;
+  var TOP_ROOT_CAUSE_SIZE = 5;
 
   // Auto-generated ID columns, keyed by sheet.
   var ID_GENERATION_CONFIG = {};
@@ -50,6 +55,10 @@ var Tracker = (function () {
     prefix: 'PERF-',
     padLength: 6
   };
+
+  // ---------------------------------------------------------------------
+  // Existing entry points (unchanged behavior)
+  // ---------------------------------------------------------------------
 
   function getInitialData() {
     var departmentData = readSheet(SHEETS.departments);
@@ -80,9 +89,6 @@ var Tracker = (function () {
       success: true,
       departments: departments,
       forms: {
-        // Agent ID, Name, and the exact "Date" column are auto-managed
-        // server-side and hidden automatically. Coaching/Dispute/Performance
-        // IDs are system-generated, so they're hidden explicitly here.
         coaching: buildFormDefinition(coachingData.headers, [FIELD_NAMES.coachingId]),
         performance: buildFormDefinition(performanceData.headers, [FIELD_NAMES.performanceId]),
         dispute: buildFormDefinition(disputeData.headers, [FIELD_NAMES.disputeId])
@@ -106,14 +112,7 @@ var Tracker = (function () {
         return toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId])) === requestedDepartmentId;
       })
       .map(function (row) {
-        return {
-          agentId: toSafeString(getFieldValue(row, [FIELD_NAMES.agentId])),
-          name: toSafeString(getFieldValue(row, [FIELD_NAMES.name])),
-          departmentId: toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId])),
-          supervisor: toSafeString(getFieldValue(row, [FIELD_NAMES.supervisor])),
-          startDate: serializeValue(getFieldValue(row, [FIELD_NAMES.startDate])),
-          status: toSafeString(getFieldValue(row, [FIELD_NAMES.status]))
-        };
+        return mapAgentRow(row);
       })
       .filter(function (agent) {
         return agent.agentId;
@@ -154,7 +153,6 @@ var Tracker = (function () {
     var departmentId = toSafeString(getFieldValue(agentRow, [FIELD_NAMES.departmentId]));
     var departmentRow = findRowByField(departmentData.rows, FIELD_NAMES.departmentId, departmentId);
 
-    // Each log is read once per request, then filtered in memory for the selected agent.
     var coachingRows = filterRowsByAgentId(coachingData.rows, requestedAgentId);
     var performanceRows = filterRowsByAgentId(performanceData.rows, requestedAgentId);
     var disputeRows = filterRowsByAgentId(disputeData.rows, requestedAgentId);
@@ -162,6 +160,7 @@ var Tracker = (function () {
     var performanceByStream = computePerformanceByStream(performanceRows);
     var overallAveragePerformance = computeOverallAverage(performanceByStream);
     var openDisputeCount = countOpenDisputes(disputeRows);
+    var openActionCount = countOpenActions(coachingRows);
 
     return {
       success: true,
@@ -182,7 +181,8 @@ var Tracker = (function () {
         mostRecentCoaching: getMostRecentDateLabel(coachingRows),
         mostRecentPerformance: getMostRecentDateLabel(performanceRows),
         mostRecentDispute: getMostRecentDateLabel(disputeRows),
-        openDisputeCount: openDisputeCount
+        openDisputeCount: openDisputeCount,
+        openActionCount: openActionCount
       },
       histories: {
         coaching: {
@@ -213,8 +213,368 @@ var Tracker = (function () {
     return saveLogEntry(SHEETS.disputeLog, 'Dispute', payload, ID_GENERATION_CONFIG[SHEETS.disputeLog]);
   }
 
-  // idConfig is optional: { header, prefix, padLength }. When provided, the
-  // matching column is always system-generated and never taken from the client.
+  // ---------------------------------------------------------------------
+  // New read-only entry points for the QA Command Centre UI
+  // (additive only — nothing above this line changes behavior)
+  // ---------------------------------------------------------------------
+
+  function getDashboardOverview() {
+    var departmentData = readSheet(SHEETS.departments);
+    var agentData = readSheet(SHEETS.agents);
+    var performanceData = readSheet(SHEETS.performanceLog);
+    var coachingData = readSheet(SHEETS.coachingLog);
+    var disputeData = readSheet(SHEETS.disputeLog);
+    var activeHeader = findHeader(departmentData.headers, [FIELD_NAMES.active]);
+
+    var departmentRows = departmentData.rows.filter(function (row) {
+      return !activeHeader || isTruthyValue(getFieldValue(row, [FIELD_NAMES.active]));
+    });
+
+    var departmentCards = departmentRows
+      .map(function (departmentRow) {
+        var departmentId = toSafeString(getFieldValue(departmentRow, [FIELD_NAMES.departmentId]));
+        if (!departmentId) {
+          return null;
+        }
+        var scoped = buildDepartmentScope(departmentId, agentData, performanceData, coachingData, disputeData);
+        return {
+          departmentId: departmentId,
+          departmentName: toSafeString(getFieldValue(departmentRow, [FIELD_NAMES.departmentName])),
+          averageScore: scoped.aggregate.averageScore,
+          totalAgents: scoped.aggregate.totalAgents,
+          totalAudits: scoped.aggregate.totalAudits,
+          totalCoachings: scoped.aggregate.totalCoachings,
+          openDisputes: scoped.aggregate.openDisputes
+        };
+      })
+      .filter(function (card) {
+        return card !== null;
+      })
+      .sort(function (a, b) {
+        return a.departmentName.localeCompare(b.departmentName);
+      });
+
+    var overallAggregate = combineAggregates(departmentCards.map(function (card) {
+      return {
+        averageScore: card.averageScore,
+        totalAgents: card.totalAgents,
+        totalAudits: card.totalAudits,
+        totalCoachings: card.totalCoachings,
+        openDisputes: card.openDisputes
+      };
+    }));
+
+    return {
+      success: true,
+      kpis: overallAggregate,
+      departments: departmentCards
+    };
+  }
+
+  function getDepartmentDashboard(departmentId) {
+    var requestedDepartmentId = toSafeString(departmentId);
+    if (!requestedDepartmentId) {
+      return {
+        success: false,
+        message: 'A department must be selected before loading its dashboard.'
+      };
+    }
+
+    var departmentData = readSheet(SHEETS.departments);
+    var departmentRow = findRowByField(departmentData.rows, FIELD_NAMES.departmentId, requestedDepartmentId);
+    if (!departmentRow) {
+      return {
+        success: false,
+        message: 'The selected department could not be found.'
+      };
+    }
+
+    var agentData = readSheet(SHEETS.agents);
+    var performanceData = readSheet(SHEETS.performanceLog);
+    var coachingData = readSheet(SHEETS.coachingLog);
+    var disputeData = readSheet(SHEETS.disputeLog);
+
+    var scoped = buildDepartmentScope(requestedDepartmentId, agentData, performanceData, coachingData, disputeData);
+
+    var agentsWithData = scoped.agentSummaries.filter(function (agentSummary) {
+      return typeof agentSummary.overallAverage === 'number';
+    });
+
+    var topPerformers = agentsWithData
+      .slice()
+      .sort(function (a, b) {
+        return b.overallAverage - a.overallAverage;
+      })
+      .slice(0, TOP_LIST_SIZE);
+
+    var needsCoaching = agentsWithData
+      .slice()
+      .sort(function (a, b) {
+        return a.overallAverage - b.overallAverage;
+      })
+      .slice(0, TOP_LIST_SIZE);
+
+    var topRootCauses = computeTopRootCauses(scoped.performanceRows, TOP_ROOT_CAUSE_SIZE);
+
+    return {
+      success: true,
+      department: {
+        departmentId: requestedDepartmentId,
+        departmentName: toSafeString(getFieldValue(departmentRow, [FIELD_NAMES.departmentName]))
+      },
+      kpis: scoped.aggregate,
+      topRootCauses: topRootCauses,
+      topPerformers: topPerformers,
+      needsCoaching: needsCoaching
+    };
+  }
+
+  function getAllCoachingRecords() {
+    return getFullLogWithAgentNames(SHEETS.coachingLog);
+  }
+
+  function getAllPerformanceRecords() {
+    return getFullLogWithAgentNames(SHEETS.performanceLog);
+  }
+
+  function getAllDisputeRecords() {
+    return getFullLogWithAgentNames(SHEETS.disputeLog);
+  }
+
+  // ---------------------------------------------------------------------
+  // Internal helpers backing the new entry points
+  // ---------------------------------------------------------------------
+
+  // Scopes agents, performance rows, coaching rows, and dispute rows to a
+  // single department, and computes both per-agent summaries and a combined
+  // department-level aggregate. Shared by getDashboardOverview (per card)
+  // and getDepartmentDashboard (full detail).
+  function buildDepartmentScope(departmentId, agentData, performanceData, coachingData, disputeData) {
+    var departmentAgents = agentData.rows.filter(function (row) {
+      return toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId])) === departmentId;
+    });
+
+    var performanceRows = [];
+    var agentSummaries = departmentAgents.map(function (agentRow) {
+      var agentId = toSafeString(getFieldValue(agentRow, [FIELD_NAMES.agentId]));
+      var agentName = toSafeString(getFieldValue(agentRow, [FIELD_NAMES.name]));
+      var agentPerformanceRows = filterRowsByAgentId(performanceData.rows, agentId);
+      var agentCoachingRows = filterRowsByAgentId(coachingData.rows, agentId);
+      var agentDisputeRows = filterRowsByAgentId(disputeData.rows, agentId);
+
+      performanceRows = performanceRows.concat(agentPerformanceRows);
+
+      var streamSummary = computePerformanceByStream(agentPerformanceRows);
+      var overallAverage = computeOverallAverage(streamSummary);
+      var totalAudits = sumNumberOfAudits(agentPerformanceRows);
+
+      return {
+        agentId: agentId,
+        name: agentName,
+        overallAverage: overallAverage,
+        totalAudits: totalAudits,
+        coachingCount: agentCoachingRows.length,
+        openDisputes: countOpenDisputes(agentDisputeRows)
+      };
+    });
+
+    var aggregate = combineAggregates(agentSummaries.map(function (agentSummary) {
+      return {
+        averageScore: agentSummary.overallAverage,
+        totalAgents: 1,
+        totalAudits: agentSummary.totalAudits,
+        totalCoachings: agentSummary.coachingCount,
+        openDisputes: agentSummary.openDisputes
+      };
+    }));
+
+    return {
+      agentSummaries: agentSummaries,
+      performanceRows: performanceRows,
+      aggregate: aggregate
+    };
+  }
+
+  // Combines a list of { averageScore, totalAgents, totalAudits,
+  // totalCoachings, openDisputes } items (one per agent or one per
+  // department) into a single rolled-up aggregate. averageScore is combined
+  // as a weighted average (weighted by totalAudits); openDisputes stays null
+  // only if every input was null (meaning "unknown" rather than "zero").
+  function combineAggregates(items) {
+    var totalAgents = items.reduce(function (sum, item) {
+      return sum + (item.totalAgents || 0);
+    }, 0);
+
+    var totalAudits = items.reduce(function (sum, item) {
+      return sum + (item.totalAudits || 0);
+    }, 0);
+
+    var totalCoachings = items.reduce(function (sum, item) {
+      return sum + (item.totalCoachings || 0);
+    }, 0);
+
+    var disputeValues = items
+      .map(function (item) {
+        return item.openDisputes;
+      })
+      .filter(function (value) {
+        return value !== null && value !== undefined;
+      });
+    var openDisputes = disputeValues.length
+      ? disputeValues.reduce(function (sum, value) { return sum + value; }, 0)
+      : null;
+
+    var scoredItems = items.filter(function (item) {
+      return typeof item.averageScore === 'number' && !isNaN(item.averageScore);
+    });
+
+    var averageScore = null;
+    if (scoredItems.length) {
+      var weightTotal = scoredItems.reduce(function (sum, item) {
+        return sum + (item.totalAudits || 0);
+      }, 0);
+
+      if (weightTotal > 0) {
+        var weightedSum = scoredItems.reduce(function (sum, item) {
+          return sum + (item.averageScore * (item.totalAudits || 0));
+        }, 0);
+        averageScore = roundNumber(weightedSum / weightTotal, 2);
+      } else {
+        var simpleSum = scoredItems.reduce(function (sum, item) {
+          return sum + item.averageScore;
+        }, 0);
+        averageScore = roundNumber(simpleSum / scoredItems.length, 2);
+      }
+    }
+
+    return {
+      averageScore: averageScore,
+      totalAgents: totalAgents,
+      totalAudits: totalAudits,
+      totalCoachings: totalCoachings,
+      openDisputes: openDisputes
+    };
+  }
+
+  function sumNumberOfAudits(rows) {
+    return rows.reduce(function (sum, row) {
+      var value = toNumber(getFieldValue(row, [FIELD_NAMES.numberOfAudits]));
+      return sum + (typeof value === 'number' && !isNaN(value) ? value : 0);
+    }, 0);
+  }
+
+  // Frequency count of Primary Root Cause across a set of performance rows,
+  // returned as the top N { rootCause, count } entries, most frequent first.
+  function computeTopRootCauses(performanceRows, limit) {
+    var counts = {};
+    performanceRows.forEach(function (row) {
+      var rootCause = toSafeString(getFieldValue(row, [FIELD_NAMES.primaryRootCause]));
+      if (!rootCause) {
+        return;
+      }
+      counts[rootCause] = (counts[rootCause] || 0) + 1;
+    });
+
+    return Object.keys(counts)
+      .map(function (rootCause) {
+        return { rootCause: rootCause, count: counts[rootCause] };
+      })
+      .sort(function (a, b) {
+        return b.count - a.count;
+      })
+      .slice(0, limit);
+  }
+
+  // Reads an entire log sheet (no agent filter) and enriches each record
+  // with the corresponding agent's name for display in list-style pages.
+  function getFullLogWithAgentNames(sheetName) {
+    var data = readSheet(sheetName);
+    var agentData = readSheet(SHEETS.agents);
+
+    var records = data.rows.map(function (row) {
+      var record = serializeRecord(data.headers, row);
+      var agentId = toSafeString(getFieldValue(row, [FIELD_NAMES.agentId]));
+      var agentRow = findRowByField(agentData.rows, FIELD_NAMES.agentId, agentId);
+      record.agentName = agentRow ? toSafeString(getFieldValue(agentRow, [FIELD_NAMES.name])) : '';
+      return record;
+    });
+
+    // Most recent first, using whichever date-like column is present.
+    var decorated = records.map(function (record, index) {
+      return { record: record, row: data.rows[index] };
+    });
+    decorated.sort(function (a, b) {
+      var dateA = extractDateFromRow(a.row);
+      var dateB = extractDateFromRow(b.row);
+      if (dateA && dateB) {
+        return dateB.getTime() - dateA.getTime();
+      }
+      if (dateA) { return -1; }
+      if (dateB) { return 1; }
+      return 0;
+    });
+
+    return {
+      success: true,
+      headers: data.headers,
+      records: decorated.map(function (item) {
+        return item.record;
+      })
+    };
+  }
+
+  // Counts coaching rows representing an outstanding follow-up action.
+  // Uses "Follow-up Completed" and/or "Follow-up Date" if present; returns
+  // null (meaning "unknown") if neither column exists, rather than guessing.
+  function countOpenActions(rows) {
+    if (!rows.length) {
+      return 0;
+    }
+
+    var hasFollowUpDateColumn = rowsHaveHeader(rows, FIELD_NAMES.followUpDate);
+    var hasCompletedColumn = rowsHaveHeader(rows, FIELD_NAMES.followUpCompleted);
+
+    if (!hasFollowUpDateColumn && !hasCompletedColumn) {
+      return null;
+    }
+
+    return rows.filter(function (row) {
+      var hasFollowUpDate = hasFollowUpDateColumn &&
+        !isEmptyValue(getFieldValue(row, [FIELD_NAMES.followUpDate]));
+
+      if (hasCompletedColumn) {
+        var isCompleted = isTruthyValue(getFieldValue(row, [FIELD_NAMES.followUpCompleted]));
+        return hasFollowUpDate ? !isCompleted : false;
+      }
+
+      return hasFollowUpDate;
+    }).length;
+  }
+
+  function rowsHaveHeader(rows, headerName) {
+    var normalizedTarget = normalizeHeader(headerName);
+    return rows.some(function (row) {
+      return Object.keys(row).some(function (key) {
+        return key.charAt(0) !== '_' && normalizeHeader(key) === normalizedTarget;
+      });
+    });
+  }
+
+  function mapAgentRow(row) {
+    return {
+      agentId: toSafeString(getFieldValue(row, [FIELD_NAMES.agentId])),
+      name: toSafeString(getFieldValue(row, [FIELD_NAMES.name])),
+      departmentId: toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId])),
+      supervisor: toSafeString(getFieldValue(row, [FIELD_NAMES.supervisor])),
+      startDate: serializeValue(getFieldValue(row, [FIELD_NAMES.startDate])),
+      status: toSafeString(getFieldValue(row, [FIELD_NAMES.status]))
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Shared save logic (unchanged)
+  // ---------------------------------------------------------------------
+
   function saveLogEntry(sheetName, label, payload, idConfig) {
     var data = readSheet(sheetName);
     var values = payload && payload.values ? payload.values : {};
@@ -243,7 +603,6 @@ var Tracker = (function () {
     }
 
     var hasUserEnteredValue = false;
-    // Build the append row from the live header row so column order is never hardcoded.
     var rowToAppend = data.headers.map(function (header) {
       var isAgentIdColumn = normalizeHeader(header) === normalizeHeader(FIELD_NAMES.agentId);
       var isNameColumn = normalizeHeader(header) === normalizeHeader(FIELD_NAMES.name);
@@ -301,9 +660,6 @@ var Tracker = (function () {
     });
   }
 
-  // Groups performance rows by QA Stream and returns the most recent
-  // (by Week Ending) snapshot for each of the four fixed streams, so the
-  // dashboard can always render all streams even if some have no data yet.
   function computePerformanceByStream(rows) {
     return QA_STREAM_OPTIONS.map(function (streamName) {
       var streamRows = rows.filter(function (row) {
@@ -340,8 +696,6 @@ var Tracker = (function () {
     });
   }
 
-  // Weighted average of each stream's latest Average Score, weighted by
-  // Number of Audits. Falls back to a simple average if weights are missing.
   function computeOverallAverage(performanceByStream) {
     var streamsWithScores = performanceByStream.filter(function (stream) {
       return stream.hasData && typeof stream.averageScore === 'number' && !isNaN(stream.averageScore);
@@ -369,9 +723,6 @@ var Tracker = (function () {
     return roundNumber(simpleSum / streamsWithScores.length, 2);
   }
 
-  // Counts disputes not marked resolved/closed. Looks for a "Dispute Status"
-  // or "Status" column; returns null (meaning "unknown") if neither exists,
-  // rather than guessing.
   function countOpenDisputes(rows) {
     if (!rows.length) {
       return 0;
@@ -395,9 +746,6 @@ var Tracker = (function () {
     }).length;
   }
 
-  // Finds the highest existing numeric suffix for the given ID column across
-  // all rows, and returns the next ID as prefix + zero-padded(number + 1).
-  // If no existing IDs are found, generation starts at 1.
   function generateNextSequentialId(rows, headerCandidates, prefix, padLength) {
     var maxNumber = 0;
 
@@ -484,9 +832,6 @@ var Tracker = (function () {
     };
   }
 
-  // Any header the server fills in automatically and that the user should
-  // never see or edit: Agent ID, Name, and the exact "Date" column (not
-  // "Follow-up Date", "Week Ending", or any other date-like header).
   function isAutoManagedHeader(header) {
     return normalizeHeader(header) === normalizeHeader(FIELD_NAMES.agentId) ||
       normalizeHeader(header) === normalizeHeader(FIELD_NAMES.name) ||
@@ -497,10 +842,6 @@ var Tracker = (function () {
     return normalizeHeader(header) === normalizeHeader(FIELD_NAMES.date);
   }
 
-  // hiddenHeaderNames (optional): additional headers to exclude from the
-  // editable "fields" list (used for system-generated ID columns). Headers
-  // matching isAutoManagedHeader are always hidden. All headers remain in
-  // "headers" so history tables still display every column.
   function buildFormDefinition(headers, hiddenHeaderNames) {
     var normalizedHidden = (hiddenHeaderNames || []).map(normalizeHeader);
 
@@ -538,7 +879,7 @@ var Tracker = (function () {
       return 'date';
     }
 
-    if (/score|points|rating/i.test(header)) {
+    if (/score|points|rating|audits/i.test(header)) {
       return 'number';
     }
 
@@ -755,6 +1096,11 @@ var Tracker = (function () {
     getAgentDashboard: getAgentDashboard,
     saveCoaching: saveCoaching,
     savePerformance: savePerformance,
-    saveDispute: saveDispute
+    saveDispute: saveDispute,
+    getDashboardOverview: getDashboardOverview,
+    getDepartmentDashboard: getDepartmentDashboard,
+    getAllCoachingRecords: getAllCoachingRecords,
+    getAllPerformanceRecords: getAllPerformanceRecords,
+    getAllDisputeRecords: getAllDisputeRecords
   };
 })();
