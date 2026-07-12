@@ -1,6 +1,6 @@
 function doGet() {
   return HtmlService.createHtmlOutputFromFile('Index')
-    .setTitle('QA Performance Management System')
+    .setTitle('QA Command Centre')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
@@ -37,6 +37,36 @@ function savePerformance(payload) {
 function saveDispute(payload) {
   return runSafely(function () {
     return Tracker.saveDispute(payload);
+  });
+}
+
+function getDashboardOverview() {
+  return runSafely(function () {
+    return Tracker.getDashboardOverview();
+  });
+}
+
+function getDepartmentDashboard(departmentId) {
+  return runSafely(function () {
+    return Tracker.getDepartmentDashboard(departmentId);
+  });
+}
+
+function getAllCoachingRecords() {
+  return runSafely(function () {
+    return Tracker.getAllCoachingRecords();
+  });
+}
+
+function getAllPerformanceRecords() {
+  return runSafely(function () {
+    return Tracker.getAllPerformanceRecords();
+  });
+}
+
+function getAllDisputeRecords() {
+  return runSafely(function () {
+    return Tracker.getAllDisputeRecords();
   });
 }
 
