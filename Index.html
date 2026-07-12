@@ -1,925 +1,1749 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <base target="_top">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>QA Performance Management System</title>
-    <style>
-      :root {
-        --bg: #f3f6fb;
-        --surface: #ffffff;
-        --surface-alt: #f8fafc;
-        --border: #d9e2ec;
-        --text: #102a43;
-        --muted: #627d98;
-        --primary: #1565c0;
-        --primary-dark: #0d47a1;
-        --success-bg: #ecfdf3;
-        --success-text: #027a48;
-        --error-bg: #fef3f2;
-        --error-text: #b42318;
-        --shadow: 0 10px 30px rgba(16, 42, 67, 0.08);
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        font-family: Arial, sans-serif;
-        background: var(--bg);
-        color: var(--text);
-      }
-
-      .app-shell {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 24px 16px 40px;
-      }
-
-      .app-header {
-        margin-bottom: 20px;
-      }
-
-      .app-header h1 {
-        margin: 0 0 8px;
-        font-size: 28px;
-      }
-
-      .app-header p {
-        margin: 0;
-        color: var(--muted);
-      }
-
-      .panel {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        box-shadow: var(--shadow);
-      }
-
-      .controls-panel {
-        padding: 20px;
-        margin-bottom: 16px;
-      }
-
-      .controls-grid,
-      .summary-grid,
-      .detail-grid,
-      .actions-row,
-      .stream-grid {
-        display: grid;
-        gap: 16px;
-      }
-
-      .controls-grid {
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      }
-
-      .field-group label {
-        display: block;
-        margin-bottom: 8px;
-        font-weight: 600;
-      }
-
-      .field-group input,
-      .field-group select,
-      .field-group textarea {
-        width: 100%;
-        padding: 11px 12px;
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        background: #fff;
-        color: var(--text);
-        font: inherit;
-      }
-
-      .field-group textarea {
-        min-height: 100px;
-        resize: vertical;
-      }
-
-      .field-group input[readonly] {
-        background: var(--surface-alt);
-      }
-
-      .status-banner {
-        display: none;
-        margin-bottom: 16px;
-        padding: 12px 14px;
-        border-radius: 12px;
-        font-weight: 600;
-      }
-
-      .status-banner.visible {
-        display: block;
-      }
-
-      .status-banner.success {
-        background: var(--success-bg);
-        color: var(--success-text);
-      }
-
-      .status-banner.error {
-        background: var(--error-bg);
-        color: var(--error-text);
-      }
-
-      .status-banner.info {
-        background: #eef4ff;
-        color: var(--primary-dark);
-      }
-
-      .summary-panel,
-      .stream-panel,
-      .history-panel {
-        padding: 20px;
-        margin-bottom: 16px;
-      }
-
-      .panel-title {
-        margin: 0 0 16px;
-        font-size: 18px;
-      }
-
-      .summary-grid {
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-        margin-bottom: 20px;
-      }
-
-      .summary-card {
-        padding: 16px;
-        border: 1px solid var(--border);
-        border-radius: 14px;
-        background: var(--surface-alt);
-      }
-
-      .summary-card span {
-        display: block;
-        color: var(--muted);
-        font-size: 13px;
-        margin-bottom: 6px;
-      }
-
-      .summary-card strong {
-        font-size: 20px;
-      }
-
-      .stream-grid {
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      }
-
-      .stream-card {
-        padding: 16px;
-        border: 1px solid var(--border);
-        border-radius: 14px;
-        background: var(--surface-alt);
-      }
-
-      .stream-card h3 {
-        margin: 0 0 10px;
-        font-size: 15px;
-      }
-
-      .stream-card .stream-row {
-        display: flex;
-        justify-content: space-between;
-        font-size: 13px;
-        margin-bottom: 6px;
-        color: var(--muted);
-      }
-
-      .stream-card .stream-row strong {
-        color: var(--text);
-      }
-
-      .stream-card.no-data {
-        color: var(--muted);
-        font-style: italic;
-      }
-
-      .detail-grid {
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      }
-
-      .detail-item {
-        padding: 12px 14px;
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        background: #fff;
-      }
-
-      .detail-item span {
-        display: block;
-        color: var(--muted);
-        font-size: 12px;
-        margin-bottom: 6px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-      }
-
-      .actions-row {
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-        margin-bottom: 20px;
-      }
-
-      .action-button,
-      .secondary-button {
-        border: 0;
-        border-radius: 10px;
-        padding: 12px 14px;
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-      }
-
-      .action-button {
-        background: var(--primary);
-        color: #fff;
-      }
-
-      .action-button:hover {
-        background: var(--primary-dark);
-      }
-
-      .secondary-button {
-        background: #e7eef7;
-        color: var(--text);
-      }
-
-      .action-button:disabled,
-      .secondary-button:disabled {
-        opacity: 0.55;
-        cursor: not-allowed;
-      }
-
-      .tabs {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-bottom: 16px;
-      }
-
-      .tab-button {
-        border: 1px solid var(--border);
-        background: #fff;
-        color: var(--muted);
-        border-radius: 999px;
-        padding: 10px 14px;
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-      }
-
-      .tab-button.active {
-        background: var(--primary);
-        border-color: var(--primary);
-        color: #fff;
-      }
-
-      .table-shell {
-        overflow-x: auto;
-        border: 1px solid var(--border);
-        border-radius: 14px;
-      }
-
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        min-width: 640px;
-        background: #fff;
-      }
-
-      th,
-      td {
-        padding: 12px 14px;
-        border-bottom: 1px solid var(--border);
-        text-align: left;
-        vertical-align: top;
-      }
-
-      th {
-        background: var(--surface-alt);
-        font-size: 13px;
-      }
-
-      .empty-state {
-        padding: 30px 16px;
-        text-align: center;
-        color: var(--muted);
-      }
-
-      .modal-backdrop {
-        position: fixed;
-        inset: 0;
-        background: rgba(16, 42, 67, 0.45);
-        display: none;
-        align-items: center;
-        justify-content: center;
-        padding: 16px;
-      }
-
-      .modal-backdrop.open {
-        display: flex;
-      }
-
-      .modal {
-        width: min(720px, 100%);
-        max-height: 90vh;
-        overflow-y: auto;
-        background: #fff;
-        border-radius: 18px;
-        padding: 20px;
-        box-shadow: var(--shadow);
-      }
-
-      .modal-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 16px;
-      }
-
-      .modal-header h2 {
-        margin: 0;
-        font-size: 22px;
-      }
-
-      .modal-body {
-        display: grid;
-        gap: 14px;
-      }
-
-      .modal-actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 10px;
-        margin-top: 18px;
-      }
-
-      @media (max-width: 768px) {
-        .app-shell {
-          padding: 18px 12px 28px;
-        }
-
-        .summary-card strong {
-          font-size: 18px;
-        }
-
-        .modal {
-          padding: 16px;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <div class="app-shell">
-      <header class="app-header">
-        <h1>QA Performance Management System</h1>
-        <p>Google Sheets remains the only permanent source of truth. Dashboard metrics are calculated in memory only. Individual audits stay in Zendesk, Talkdesk, and D2C — this app tracks weekly consolidated performance, coaching, and disputes.</p>
-      </header>
-
-      <div id="statusBanner" class="status-banner"></div>
-
-      <section class="panel controls-panel">
-        <div class="controls-grid">
-          <div class="field-group">
-            <label for="departmentSelect">Department</label>
-            <select id="departmentSelect">
-              <option value="">Select a department</option>
-            </select>
-          </div>
-          <div class="field-group">
-            <label for="agentSelect">Agent</label>
-            <select id="agentSelect" disabled>
-              <option value="">Select an agent</option>
-            </select>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel summary-panel">
-        <h2 class="panel-title">Agent Summary</h2>
-        <div class="summary-grid" id="summaryGrid">
-          <div class="summary-card"><span>Agent</span><strong id="summaryAgent">None selected</strong></div>
-          <div class="summary-card"><span>Overall Avg Performance</span><strong id="summaryOverallAverage">N/A</strong></div>
-          <div class="summary-card"><span>Coaching Count</span><strong id="summaryCoachingCount">0</strong></div>
-          <div class="summary-card"><span>Latest Coaching</span><strong id="summaryLatestCoaching">None</strong></div>
-          <div class="summary-card"><span>Latest Performance</span><strong id="summaryLatestPerformance">None</strong></div>
-          <div class="summary-card"><span>Open Disputes</span><strong id="summaryOpenDisputes">N/A</strong></div>
-        </div>
-
-        <div class="detail-grid" id="agentDetails">
-          <div class="detail-item">
-            <span>Status</span>
-            <strong>Select an agent to load details.</strong>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel stream-panel">
-        <h2 class="panel-title">Performance by QA Stream</h2>
-        <div class="stream-grid" id="streamGrid">
-          <div class="stream-card no-data">Select an agent to load performance by stream.</div>
-        </div>
-      </section>
-
-      <section class="panel history-panel">
-        <div class="actions-row">
-          <button id="addCoachingButton" class="action-button" data-form-type="coaching" disabled>Add Coaching</button>
-          <button id="addPerformanceButton" class="action-button" data-form-type="performance" disabled>Add Performance</button>
-          <button id="addDisputeButton" class="action-button" data-form-type="dispute" disabled>Add Dispute</button>
-        </div>
-
-        <div class="tabs">
-          <button class="tab-button active" data-tab="coaching">Coaching History</button>
-          <button class="tab-button" data-tab="performance">Performance History</button>
-          <button class="tab-button" data-tab="dispute">Disputes</button>
-        </div>
-
-        <div id="historyContent"></div>
-      </section>
+<head>
+<base target="_top">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QA Command Centre</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --space-7: 48px;
+
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 18px;
+
+    --bg: #f6f7fb;
+    --surface: #ffffff;
+    --surface-alt: #fafbfd;
+    --border: #e6e8f0;
+    --border-soft: #eef0f6;
+
+    --text: #14161f;
+    --text-muted: #6b7086;
+    --text-faint: #9498ab;
+
+    --primary: #4f46e5;
+    --primary-dark: #4338ca;
+    --primary-soft: #eef0ff;
+
+    --success: #17845b;
+    --success-bg: #e8f8f1;
+    --warning: #b45309;
+    --warning-bg: #fef3e2;
+    --danger: #c0293a;
+    --danger-bg: #fdeced;
+
+    --shadow-sm: 0 1px 2px rgba(20, 22, 31, 0.04);
+    --shadow-md: 0 8px 24px rgba(20, 22, 31, 0.06);
+    --shadow-lg: 0 16px 40px rgba(20, 22, 31, 0.10);
+
+    --sidebar-w: 248px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4 { font-family: inherit; margin: 0; letter-spacing: -0.01em; }
+
+  button { font-family: inherit; }
+
+  /* ---------- Layout shell ---------- */
+
+  .shell { display: flex; min-height: 100vh; }
+
+  .sidebar {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: var(--space-5) var(--space-3);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-3);
+    margin-bottom: var(--space-6);
+  }
+
+  .brand-mark {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, var(--primary), #7c72f0);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 800;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+
+  .brand-text { font-weight: 700; font-size: 15px; line-height: 1.2; }
+  .brand-text span { display: block; font-weight: 500; font-size: 11px; color: var(--text-faint); }
+
+  .nav-group { display: flex; flex-direction: column; gap: 2px; }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 10px var(--space-3);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 13.5px;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    text-align: left;
+    width: 100%;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .nav-item:hover { background: var(--surface-alt); color: var(--text); }
+
+  .nav-item.active {
+    background: var(--primary-soft);
+    color: var(--primary-dark);
+    font-weight: 600;
+  }
+
+  .nav-icon {
+    width: 18px; height: 18px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .nav-icon svg { width: 100%; height: 100%; }
+
+  .sidebar-footer {
+    margin-top: auto;
+    padding: var(--space-3);
+    font-size: 11.5px;
+    color: var(--text-faint);
+  }
+
+  .main {
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-6) var(--space-7);
+  }
+
+  .page-view { display: none; animation: fadeIn 0.2s ease; }
+  .page-view.active { display: block; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+    margin-bottom: var(--space-6);
+  }
+
+  .page-header h1 { font-size: 24px; font-weight: 700; }
+  .page-header p { margin: 6px 0 0; color: var(--text-muted); font-size: 13.5px; }
+
+  .breadcrumbs {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--text-muted); margin-bottom: var(--space-2);
+  }
+  .breadcrumbs button {
+    background: none; border: none; color: var(--text-muted); font: inherit;
+    cursor: pointer; padding: 2px 4px; border-radius: 6px;
+  }
+  .breadcrumbs button:hover { background: var(--surface-alt); color: var(--text); }
+  .breadcrumbs .crumb-current { color: var(--text); font-weight: 600; }
+  .breadcrumbs .crumb-sep { color: var(--text-faint); }
+
+  /* ---------- Cards & grids ---------- */
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
+  }
+
+  .kpi-grid, .stream-grid, .list-grid, .report-grid {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: var(--space-6); }
+  .stream-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .list-grid { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .report-grid { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+  .kpi-card { padding: var(--space-5); }
+  .kpi-card .kpi-label { font-size: 12.5px; color: var(--text-muted); font-weight: 500; margin-bottom: var(--space-2); }
+  .kpi-card .kpi-value { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  .kpi-card .kpi-sub { font-size: 12px; color: var(--text-faint); margin-top: 4px; }
+
+  .section { margin-bottom: var(--space-6); }
+  .section-title {
+    font-size: 15px; font-weight: 700; margin-bottom: var(--space-4);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+
+  .dept-card, .agent-card, .performer-card {
+    padding: var(--space-5);
+    cursor: pointer;
+  }
+  .dept-card:hover, .agent-card:hover, .performer-card:hover.clickable {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+  }
+
+  .dept-card h3, .performer-card h3 { font-size: 15.5px; font-weight: 600; margin-bottom: var(--space-3); }
+  .dept-card .dept-meta, .performer-card .performer-meta {
+    display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4);
+    font-size: 12.5px; color: var(--text-muted);
+  }
+  .dept-card .dept-meta strong, .performer-card .performer-meta strong { color: var(--text); font-weight: 600; }
+
+  .stream-card { padding: var(--space-4); }
+  .stream-card h4 { font-size: 13.5px; font-weight: 700; margin-bottom: var(--space-3); }
+  .stream-card.no-data { color: var(--text-faint); font-style: italic; }
+  .stream-row { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--text-muted); margin-bottom: 6px; }
+  .stream-row strong { color: var(--text); }
+
+  .badge {
+    display: inline-block; padding: 2px 9px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 600;
+  }
+  .badge.success { background: var(--success-bg); color: var(--success); }
+  .badge.warning { background: var(--warning-bg); color: var(--warning); }
+  .badge.danger { background: var(--danger-bg); color: var(--danger); }
+  .badge.neutral { background: var(--surface-alt); color: var(--text-muted); border: 1px solid var(--border); }
+
+  .root-cause-row {
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-3) 0; border-bottom: 1px solid var(--border-soft);
+    font-size: 13px;
+  }
+  .root-cause-row:last-child { border-bottom: none; }
+  .root-cause-bar { flex: 1; height: 6px; border-radius: 4px; background: var(--border-soft); overflow: hidden; }
+  .root-cause-bar-fill { height: 100%; background: var(--primary); border-radius: 4px; }
+  .root-cause-count { font-weight: 600; width: 24px; text-align: right; color: var(--text-muted); }
+
+  /* ---------- Buttons ---------- */
+
+  .btn {
+    border: none; border-radius: var(--radius-sm); padding: 10px 16px;
+    font-weight: 600; font-size: 13.5px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+  }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover { background: var(--primary-dark); }
+  .btn-secondary { background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover { background: var(--border-soft); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-sm { padding: 7px 12px; font-size: 12.5px; }
+
+  /* ---------- Forms ---------- */
+
+  .field-group { display: flex; flex-direction: column; gap: 6px; }
+  .field-group label { font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
+  .field-group input, .field-group select, .field-group textarea {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
+    font: inherit; font-size: 13.5px;
+  }
+  .field-group input:focus, .field-group select:focus, .field-group textarea:focus {
+    outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft);
+  }
+  .field-group textarea { min-height: 90px; resize: vertical; }
+  .field-group input[readonly] { background: var(--surface-alt); color: var(--text-muted); }
+
+  .form-grid { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+
+  /* ---------- Status banner ---------- */
+
+  .status-banner {
+    display: none; margin-bottom: var(--space-5); padding: 12px 16px;
+    border-radius: var(--radius-sm); font-weight: 600; font-size: 13px;
+  }
+  .status-banner.visible { display: block; }
+  .status-banner.success { background: var(--success-bg); color: var(--success); }
+  .status-banner.error { background: var(--danger-bg); color: var(--danger); }
+  .status-banner.info { background: var(--primary-soft); color: var(--primary-dark); }
+
+  /* ---------- Tables ---------- */
+
+  .table-toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-3); margin-bottom: var(--space-4);
+  }
+  .table-toolbar input {
+    padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font: inherit; font-size: 13px; width: 260px; background: var(--surface);
+  }
+
+  .table-shell {
+    overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-lg);
+    background: var(--surface); box-shadow: var(--shadow-sm);
+  }
+  table { width: 100%; border-collapse: collapse; min-width: 640px; }
+  th, td { padding: 12px 16px; border-bottom: 1px solid var(--border-soft); text-align: left; vertical-align: top; font-size: 13px; }
+  th { background: var(--surface-alt); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--surface-alt); }
+
+  .empty-state { padding: var(--space-7) var(--space-4); text-align: center; color: var(--text-faint); font-size: 13.5px; }
+
+  /* ---------- Weekly Review page ---------- */
+
+  .review-layout { display: grid; grid-template-columns: 1.6fr 1fr; gap: var(--space-5); align-items: start; }
+  @media (max-width: 1100px) { .review-layout { grid-template-columns: 1fr; } }
+
+  .review-panel { padding: var(--space-5); }
+  .review-panel + .review-panel { margin-top: var(--space-5); }
+
+  .audit-inputs { display: grid; gap: var(--space-4); }
+  .audit-input label { font-size: 12.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; display: block; }
+  .audit-input textarea { min-height: 76px; }
+
+  .calc-panel { position: sticky; top: var(--space-6); }
+  .calc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); margin-bottom: var(--space-4); }
+  .calc-stat { background: var(--surface-alt); border-radius: var(--radius-sm); padding: var(--space-3); text-align: center; }
+  .calc-stat .calc-value { font-size: 20px; font-weight: 700; }
+  .calc-stat .calc-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  .review-actions { display: flex; gap: var(--space-3); margin-top: var(--space-5); }
+
+  /* ---------- Timeline ---------- */
+
+  .timeline { display: flex; flex-direction: column; }
+  .timeline-item { display: flex; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-soft); }
+  .timeline-item:last-child { border-bottom: none; }
+  .timeline-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); margin-top: 6px; flex-shrink: 0; }
+  .timeline-dot.coaching { background: var(--warning); }
+  .timeline-body { flex: 1; }
+  .timeline-meta { font-size: 11.5px; color: var(--text-faint); margin-bottom: 2px; }
+  .timeline-title { font-size: 13.5px; font-weight: 600; }
+  .timeline-desc { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
+
+  /* ---------- Modal ---------- */
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(20, 22, 31, 0.45);
+    display: none; align-items: center; justify-content: center; padding: var(--space-4); z-index: 50;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    width: min(680px, 100%); max-height: 88vh; overflow-y: auto;
+    background: var(--surface); border-radius: var(--radius-lg); padding: var(--space-5);
+    box-shadow: var(--shadow-lg);
+  }
+  .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-4); }
+  .modal-header h2 { font-size: 18px; font-weight: 700; }
+  .modal-body { display: grid; gap: var(--space-4); }
+  .modal-actions { display: flex; justify-content: flex-end; gap: var(--space-3); margin-top: var(--space-5); }
+  .modal-agent-context {
+    background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: var(--space-3) var(--space-4); font-size: 13px; color: var(--text-muted);
+  }
+  .modal-agent-context strong { color: var(--text); }
+
+  /* ---------- Report panel ---------- */
+
+  .report-card { padding: var(--space-5); }
+  .report-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+  .report-card p { font-size: 12.5px; color: var(--text-muted); margin: 0 0 var(--space-4); }
+  .report-output {
+    margin-top: var(--space-5); padding: var(--space-5); white-space: pre-wrap;
+    font-size: 13px; line-height: 1.6;
+  }
+  .report-output h3 { margin-bottom: var(--space-3); }
+
+  @media print {
+    .sidebar, .page-header, .table-toolbar, .btn, .report-grid { display: none !important; }
+    .main { padding: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">QA</div>
+      <div class="brand-text">Command Centre<span>QA Performance Mgmt</span></div>
     </div>
+    <nav class="nav-group" id="sidebarNav">
+      <button class="nav-item active" data-page="dashboard">
+        <span class="nav-icon">&#9673;</span> Dashboard
+      </button>
+      <button class="nav-item" data-page="weekly-review">
+        <span class="nav-icon">&#9998;</span> Weekly Review
+      </button>
+      <button class="nav-item" data-page="coachings">
+        <span class="nav-icon">&#9737;</span> Coachings
+      </button>
+      <button class="nav-item" data-page="performance">
+        <span class="nav-icon">&#9650;</span> Performance
+      </button>
+      <button class="nav-item" data-page="disputes">
+        <span class="nav-icon">&#9888;</span> Disputes
+      </button>
+      <button class="nav-item" data-page="reports">
+        <span class="nav-icon">&#8862;</span> Reports
+      </button>
+      <button class="nav-item" data-page="settings">
+        <span class="nav-icon">&#9881;</span> Settings
+      </button>
+    </nav>
+    <div class="sidebar-footer">Google Sheets is the permanent source of truth. Audits remain in Zendesk, Talkdesk &amp; D2C.</div>
+  </aside>
 
-    <div id="modalBackdrop" class="modal-backdrop">
-      <div class="modal">
-        <div class="modal-header">
-          <h2 id="modalTitle">Add Record</h2>
-          <button id="closeModalButton" class="secondary-button" type="button">Close</button>
+  <main class="main">
+    <div id="statusBanner" class="status-banner"></div>
+
+    <!-- DASHBOARD PAGE -->
+    <section class="page-view active" data-page-view="dashboard" id="page-dashboard">
+      <div class="breadcrumbs" id="dashboardBreadcrumbs"></div>
+      <div class="page-header">
+        <div>
+          <h1 id="dashboardTitle">Dashboard</h1>
+          <p id="dashboardSubtitle">Overview across all departments.</p>
         </div>
-        <form id="recordForm">
-          <div id="modalBody" class="modal-body"></div>
-          <div class="modal-actions">
-            <button class="secondary-button" type="button" id="cancelModalButton">Cancel</button>
-            <button class="action-button" type="submit" id="saveModalButton">Save</button>
-          </div>
-        </form>
       </div>
+      <div id="dashboardContent"></div>
+    </section>
+
+    <!-- WEEKLY REVIEW PAGE -->
+    <section class="page-view" data-page-view="weekly-review" id="page-weekly-review">
+      <div class="page-header">
+        <div>
+          <h1>Weekly Review</h1>
+          <p>Consolidate this week's audits into one Performance Log entry per agent per QA stream.</p>
+        </div>
+      </div>
+
+      <div class="review-layout">
+        <div>
+          <div class="card review-panel">
+            <div class="form-grid" style="margin-bottom: var(--space-4);">
+              <div class="field-group">
+                <label>Week Ending</label>
+                <input type="date" id="reviewWeekEnding">
+              </div>
+              <div class="field-group">
+                <label>QA Stream</label>
+                <select id="reviewQaStream">
+                  <option value="">Select a QA stream</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label>Department</label>
+                <select id="reviewDepartment">
+                  <option value="">Select a department</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label>Agent</label>
+                <select id="reviewAgent" disabled>
+                  <option value="">Select an agent</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="audit-inputs">
+              <div class="audit-input">
+                <label>Audit Batch 1 &mdash; paste scores or notes (any numbers found are used)</label>
+                <textarea id="auditBatch1" placeholder="e.g. Call 1: 92, Call 2: 88, tone was professional..."></textarea>
+              </div>
+              <div class="audit-input">
+                <label>Audit Batch 2</label>
+                <textarea id="auditBatch2" placeholder="e.g. Ticket audits: 95, 90, 100..."></textarea>
+              </div>
+              <div class="audit-input">
+                <label>Audit Batch 3</label>
+                <textarea id="auditBatch3" placeholder="Optional additional audits..."></textarea>
+              </div>
+            </div>
+          </div>
+
+          <div class="card review-panel">
+            <div class="form-grid">
+              <div class="field-group">
+                <label>Primary Root Cause</label>
+                <input type="text" id="reviewRootCause" placeholder="e.g. Missed verification step">
+              </div>
+            </div>
+            <div class="field-group" style="margin-top: var(--space-4);">
+              <label>QA Summary / Overall Feedback</label>
+              <textarea id="reviewSummary" style="min-height: 120px;" placeholder="Click Generate Review for a starting draft, then edit as needed."></textarea>
+            </div>
+            <div class="review-actions">
+              <button class="btn btn-secondary" id="generateReviewButton" type="button">Generate Review</button>
+              <button class="btn btn-primary" id="saveReviewButton" type="button">Save Weekly Review</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card review-panel calc-panel">
+          <h3 style="font-size:14px; margin-bottom: var(--space-4);">Live Calculation</h3>
+          <div class="calc-grid">
+            <div class="calc-stat"><div class="calc-value" id="calcAverage">&mdash;</div><div class="calc-label">Average</div></div>
+            <div class="calc-stat"><div class="calc-value" id="calcHighest">&mdash;</div><div class="calc-label">Highest</div></div>
+            <div class="calc-stat"><div class="calc-value" id="calcLowest">&mdash;</div><div class="calc-label">Lowest</div></div>
+            <div class="calc-stat"><div class="calc-value" id="calcCount">0</div><div class="calc-label">Audit Count</div></div>
+          </div>
+          <p style="font-size:12px; color: var(--text-faint); margin:0;">Numbers are detected automatically from all three audit boxes. This becomes the Average Score and Number of Audits saved to the Performance Log &mdash; individual audit detail stays in Zendesk/Talkdesk/D2C.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- COACHINGS PAGE -->
+    <section class="page-view" data-page-view="coachings" id="page-coachings">
+      <div class="page-header">
+        <div>
+          <h1>Coachings</h1>
+          <p>Every coaching session recorded across all agents.</p>
+        </div>
+        <button class="btn btn-primary" id="addCoachingFromListButton">+ Add Coaching</button>
+      </div>
+      <div class="table-toolbar">
+        <input type="text" id="coachingSearchInput" placeholder="Search coachings...">
+      </div>
+      <div id="coachingTableShell"></div>
+    </section>
+
+    <!-- PERFORMANCE PAGE -->
+    <section class="page-view" data-page-view="performance" id="page-performance">
+      <div class="page-header">
+        <div>
+          <h1>Performance</h1>
+          <p>Every weekly performance snapshot across all agents and QA streams.</p>
+        </div>
+        <button class="btn btn-primary" id="addPerformanceFromListButton">+ Add Performance</button>
+      </div>
+      <div class="table-toolbar">
+        <input type="text" id="performanceSearchInput" placeholder="Search performance records...">
+      </div>
+      <div id="performanceTableShell"></div>
+    </section>
+
+    <!-- DISPUTES PAGE -->
+    <section class="page-view" data-page-view="disputes" id="page-disputes">
+      <div class="page-header">
+        <div>
+          <h1>Disputes</h1>
+          <p>Every dispute raised against an audit record.</p>
+        </div>
+        <button class="btn btn-primary" id="addDisputeFromListButton">+ Add Dispute</button>
+      </div>
+      <div class="table-toolbar">
+        <input type="text" id="disputeSearchInput" placeholder="Search disputes...">
+      </div>
+      <div id="disputeTableShell"></div>
+    </section>
+
+    <!-- REPORTS PAGE -->
+    <section class="page-view" data-page-view="reports" id="page-reports">
+      <div class="page-header">
+        <div>
+          <h1>Reports</h1>
+          <p>Generate a report from current data. Use your browser's print option to export as PDF.</p>
+        </div>
+      </div>
+      <div class="report-grid">
+        <div class="card report-card">
+          <h3>Weekly Report</h3>
+          <p>Overall KPIs and top root causes across all departments.</p>
+          <button class="btn btn-secondary btn-sm" data-report="weekly">Generate</button>
+        </div>
+        <div class="card report-card">
+          <h3>Department Report</h3>
+          <p>Full department detail: KPIs, top performers, needs-coaching list.</p>
+          <select class="report-scope-select" data-report-scope="department" style="margin-bottom:var(--space-3); width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px; font:inherit; font-size:13px;">
+            <option value="">Select a department</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" data-report="department">Generate</button>
+        </div>
+        <div class="card report-card">
+          <h3>Recognition Report</h3>
+          <p>Top performing agents for a department, ready to share.</p>
+          <select class="report-scope-select" data-report-scope="recognition" style="margin-bottom:var(--space-3); width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px; font:inherit; font-size:13px;">
+            <option value="">Select a department</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" data-report="recognition">Generate</button>
+        </div>
+        <div class="card report-card">
+          <h3>Coaching Report</h3>
+          <p>All coaching activity for a department's agents.</p>
+          <select class="report-scope-select" data-report-scope="coaching" style="margin-bottom:var(--space-3); width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px; font:inherit; font-size:13px;">
+            <option value="">Select a department</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" data-report="coaching">Generate</button>
+        </div>
+      </div>
+      <div class="card report-output" id="reportOutput" style="display:none;"></div>
+    </section>
+
+    <!-- SETTINGS PAGE -->
+    <section class="page-view" data-page-view="settings" id="page-settings">
+      <div class="page-header">
+        <div>
+          <h1>Settings</h1>
+          <p>About this workspace.</p>
+        </div>
+      </div>
+      <div class="card" style="padding: var(--space-5); max-width: 520px;">
+        <p style="margin:0 0 var(--space-3); font-size: 13.5px; color: var(--text-muted);">QA Command Centre reads and writes directly to this Google Sheet. There is no separate database &mdash; every value shown here is calculated live from the Departments, Agents, Coaching Log, Performance Log, and Dispute Log tabs.</p>
+        <p style="margin:0; font-size: 13.5px; color: var(--text-muted);">Individual audit records remain the responsibility of Zendesk, Talkdesk, and D2C reporting &mdash; this tool only stores consolidated weekly performance, coaching sessions, and disputes.</p>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- Shared modal for Add Coaching / Performance / Dispute -->
+<div id="modalBackdrop" class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modalTitle">Add Record</h2>
+      <button class="btn btn-secondary btn-sm" id="closeModalButton" type="button">Close</button>
     </div>
+    <form id="recordForm">
+      <div id="modalBody" class="modal-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" type="button" id="cancelModalButton">Cancel</button>
+        <button class="btn btn-primary" type="submit" id="saveModalButton">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
 
-    <script>
-      var appState = {
-        initialData: null,
-        agents: [],
-        currentDashboard: null,
-        selectedDepartmentId: '',
-        selectedAgentId: '',
-        activeTab: 'coaching',
-        activeFormType: ''
-      };
+<script>
+  // ===========================================================================
+  // Application state
+  // ===========================================================================
+  var appState = {
+    initialData: null,          // getInitialData() result: departments + form schemas
+    dashboardView: 'overview',  // 'overview' | 'department' | 'agent'
+    dashboardDeptId: '',
+    dashboardAgentId: '',
+    dashboardOverviewCache: null,
+    departmentCache: {},        // departmentId -> getDepartmentDashboard() result
+    agentCache: {},              // agentId -> getAgentDashboard() result
+    agentsByDept: {},            // departmentId -> agents[] (from getAgentsByDepartment)
+    logCache: {},                // 'coaching' | 'performance' | 'dispute' -> full log result
+    activeFormType: '',
+    modalContext: null           // { agentId, name } when Add is launched with a known agent
+  };
 
-      var formConfig = {
-        coaching: {
-          title: 'Add Coaching',
-          method: 'saveCoaching'
-        },
-        performance: {
-          title: 'Add Performance',
-          method: 'savePerformance'
-        },
-        dispute: {
-          title: 'Add Dispute',
-          method: 'saveDispute'
+  var formConfig = {
+    coaching: { title: 'Add Coaching', method: 'saveCoaching', schemaKey: 'coaching' },
+    performance: { title: 'Add Performance', method: 'savePerformance', schemaKey: 'performance' },
+    dispute: { title: 'Add Dispute', method: 'saveDispute', schemaKey: 'dispute' }
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+    bindGlobalEvents();
+    loadInitialData();
+  });
+
+  // ===========================================================================
+  // Navigation
+  // ===========================================================================
+  function bindGlobalEvents() {
+    Array.prototype.slice.call(document.querySelectorAll('.nav-item')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        switchPage(button.getAttribute('data-page'));
+      });
+    });
+
+    document.getElementById('closeModalButton').addEventListener('click', closeModal);
+    document.getElementById('cancelModalButton').addEventListener('click', closeModal);
+    document.getElementById('recordForm').addEventListener('submit', handleRecordSave);
+    document.getElementById('modalBackdrop').addEventListener('click', function (event) {
+      if (event.target.id === 'modalBackdrop') { closeModal(); }
+    });
+
+    document.getElementById('addCoachingFromListButton').addEventListener('click', function () {
+      openModal('coaching', null);
+    });
+    document.getElementById('addPerformanceFromListButton').addEventListener('click', function () {
+      openModal('performance', null);
+    });
+    document.getElementById('addDisputeFromListButton').addEventListener('click', function () {
+      openModal('dispute', null);
+    });
+
+    document.getElementById('coachingSearchInput').addEventListener('input', function (e) {
+      renderLogTable('coaching', e.target.value);
+    });
+    document.getElementById('performanceSearchInput').addEventListener('input', function (e) {
+      renderLogTable('performance', e.target.value);
+    });
+    document.getElementById('disputeSearchInput').addEventListener('input', function (e) {
+      renderLogTable('dispute', e.target.value);
+    });
+
+    document.getElementById('reviewDepartment').addEventListener('change', handleReviewDepartmentChange);
+    document.getElementById('generateReviewButton').addEventListener('click', handleGenerateReview);
+    document.getElementById('saveReviewButton').addEventListener('click', handleSaveReview);
+
+    ['auditBatch1', 'auditBatch2', 'auditBatch3'].forEach(function (id) {
+      document.getElementById(id).addEventListener('input', updateLiveCalculation);
+    });
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-report]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        generateReport(button.getAttribute('data-report'));
+      });
+    });
+  }
+
+  function switchPage(pageName) {
+    Array.prototype.slice.call(document.querySelectorAll('.nav-item')).forEach(function (button) {
+      button.classList.toggle('active', button.getAttribute('data-page') === pageName);
+    });
+    Array.prototype.slice.call(document.querySelectorAll('.page-view')).forEach(function (section) {
+      section.classList.toggle('active', section.getAttribute('data-page-view') === pageName);
+    });
+
+    if (pageName === 'dashboard' && !appState.dashboardOverviewCache) {
+      loadDashboardOverview();
+    }
+    if (pageName === 'coachings') { loadLog('coaching'); }
+    if (pageName === 'performance') { loadLog('performance'); }
+    if (pageName === 'disputes') { loadLog('dispute'); }
+  }
+
+  // ===========================================================================
+  // Initial data
+  // ===========================================================================
+  function loadInitialData() {
+    showStatus('Loading workspace...', 'info');
+    callServer('getInitialData', undefined, function (result) {
+      appState.initialData = result;
+      populateDepartmentSelects(result.departments || []);
+      loadDashboardOverview();
+      showStatus('Ready.', 'success');
+    });
+  }
+
+  function populateDepartmentSelects(departments) {
+    var selects = [
+      document.getElementById('reviewDepartment')
+    ].concat(Array.prototype.slice.call(document.querySelectorAll('.report-scope-select')));
+
+    selects.forEach(function (select) {
+      var placeholder = select.options[0] ? select.options[0].outerHTML : '<option value="">Select</option>';
+      select.innerHTML = placeholder;
+      departments.forEach(function (department) {
+        var option = document.createElement('option');
+        option.value = department.departmentId;
+        option.textContent = department.departmentName || department.departmentId;
+        select.appendChild(option);
+      });
+    });
+
+    var qaStreamSelect = document.getElementById('reviewQaStream');
+    var performanceSchema = appState.initialData && appState.initialData.forms
+      ? appState.initialData.forms.performance : null;
+    var qaStreamField = performanceSchema
+      ? (performanceSchema.fields || []).find(function (f) { return f.type === 'select'; })
+      : null;
+    qaStreamSelect.innerHTML = '<option value="">Select a QA stream</option>';
+    (qaStreamField && qaStreamField.options ? qaStreamField.options : ['Customer Voice', 'Customer Text', 'Clerk Support', 'D2C'])
+      .forEach(function (streamName) {
+        var option = document.createElement('option');
+        option.value = streamName;
+        option.textContent = streamName;
+        qaStreamSelect.appendChild(option);
+      });
+  }
+
+  // ===========================================================================
+  // Dashboard: overview / department / agent drill-down
+  // ===========================================================================
+  function loadDashboardOverview() {
+    showStatus('Loading dashboard...', 'info');
+    callServer('getDashboardOverview', undefined, function (result) {
+      appState.dashboardOverviewCache = result;
+      appState.dashboardView = 'overview';
+      renderDashboard();
+      showStatus('Dashboard loaded.', 'success');
+    });
+  }
+
+  function openDepartment(departmentId) {
+    appState.dashboardView = 'department';
+    appState.dashboardDeptId = departmentId;
+    if (appState.departmentCache[departmentId]) {
+      renderDashboard();
+      return;
+    }
+    showStatus('Loading department dashboard...', 'info');
+    callServer('getDepartmentDashboard', departmentId, function (result) {
+      appState.departmentCache[departmentId] = result;
+      renderDashboard();
+      showStatus('Department dashboard loaded.', 'success');
+    });
+  }
+
+  function openAgent(agentId) {
+    appState.dashboardView = 'agent';
+    appState.dashboardAgentId = agentId;
+    if (appState.agentCache[agentId]) {
+      renderDashboard();
+      return;
+    }
+    showStatus('Loading agent dashboard...', 'info');
+    callServer('getAgentDashboard', agentId, function (result) {
+      appState.agentCache[agentId] = result;
+      renderDashboard();
+      showStatus('Agent dashboard loaded.', 'success');
+    });
+  }
+
+  function renderDashboard() {
+    var breadcrumbs = document.getElementById('dashboardBreadcrumbs');
+    var titleEl = document.getElementById('dashboardTitle');
+    var subtitleEl = document.getElementById('dashboardSubtitle');
+    var content = document.getElementById('dashboardContent');
+
+    if (appState.dashboardView === 'overview') {
+      breadcrumbs.innerHTML = '';
+      titleEl.textContent = 'Dashboard';
+      subtitleEl.textContent = 'Overview across all departments.';
+      content.innerHTML = renderOverviewView(appState.dashboardOverviewCache);
+      bindOverviewClicks();
+      return;
+    }
+
+    if (appState.dashboardView === 'department') {
+      var deptResult = appState.departmentCache[appState.dashboardDeptId];
+      var deptName = deptResult && deptResult.department ? deptResult.department.departmentName : 'Department';
+      breadcrumbs.innerHTML =
+        '<button data-crumb="overview">Dashboard</button>' +
+        '<span class="crumb-sep">/</span>' +
+        '<span class="crumb-current">' + escapeHtml(deptName) + '</span>';
+      titleEl.textContent = deptName;
+      subtitleEl.textContent = 'Department performance overview.';
+      content.innerHTML = deptResult ? renderDepartmentView(deptResult) : '<div class="empty-state">Unable to load this department.</div>';
+      bindBreadcrumbClicks();
+      bindDepartmentClicks();
+      return;
+    }
+
+    if (appState.dashboardView === 'agent') {
+      var agentResult = appState.agentCache[appState.dashboardAgentId];
+      var agent = agentResult ? agentResult.agent : null;
+      var deptCrumbName = agent ? agent.departmentName : '';
+      var deptCrumbId = agent ? agent.departmentId : '';
+
+      breadcrumbs.innerHTML =
+        '<button data-crumb="overview">Dashboard</button>' +
+        '<span class="crumb-sep">/</span>' +
+        (deptCrumbId
+          ? '<button data-crumb="department" data-crumb-id="' + escapeAttribute(deptCrumbId) + '">' + escapeHtml(deptCrumbName) + '</button><span class="crumb-sep">/</span>'
+          : '') +
+        '<span class="crumb-current">' + escapeHtml(agent ? agent.name : 'Agent') + '</span>';
+      titleEl.textContent = agent ? agent.name : 'Agent';
+      subtitleEl.textContent = agent ? (agent.departmentName + ' \u2022 ' + agent.supervisor) : '';
+      content.innerHTML = agentResult ? renderAgentView(agentResult) : '<div class="empty-state">Unable to load this agent.</div>';
+      bindBreadcrumbClicks();
+      bindAgentViewEvents();
+      return;
+    }
+  }
+
+  function bindBreadcrumbClicks() {
+    Array.prototype.slice.call(document.querySelectorAll('[data-crumb]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        var crumb = button.getAttribute('data-crumb');
+        if (crumb === 'overview') {
+          appState.dashboardView = 'overview';
+          renderDashboard();
+        } else if (crumb === 'department') {
+          openDepartment(button.getAttribute('data-crumb-id'));
         }
-      };
+      });
+    });
+  }
 
-      document.addEventListener('DOMContentLoaded', function () {
-        bindEvents();
-        loadInitialData();
+  function renderOverviewView(overview) {
+    if (!overview) {
+      return '<div class="empty-state">Loading...</div>';
+    }
+    var kpis = overview.kpis || {};
+
+    var kpiHtml =
+      '<div class="kpi-grid">' +
+        kpiCard('Overall Average', formatScore(kpis.averageScore)) +
+        kpiCard('Total Audits', formatCount(kpis.totalAudits)) +
+        kpiCard('Total Agents', formatCount(kpis.totalAgents)) +
+        kpiCard('Total Coachings', formatCount(kpis.totalCoachings)) +
+        kpiCard('Open Disputes', formatCountOrNA(kpis.openDisputes)) +
+      '</div>';
+
+    var deptCards = (overview.departments || []).map(function (dept) {
+      return (
+        '<div class="card dept-card" data-open-dept="' + escapeAttribute(dept.departmentId) + '">' +
+          '<h3>' + escapeHtml(dept.departmentName) + '</h3>' +
+          '<div class="dept-meta">' +
+            '<span>Avg Score <strong>' + escapeHtml(formatScore(dept.averageScore)) + '</strong></span>' +
+            '<span>Agents <strong>' + escapeHtml(formatCount(dept.totalAgents)) + '</strong></span>' +
+            '<span>Audits <strong>' + escapeHtml(formatCount(dept.totalAudits)) + '</strong></span>' +
+            '<span>Coachings <strong>' + escapeHtml(formatCount(dept.totalCoachings)) + '</strong></span>' +
+            '<span>Open Disputes <strong>' + escapeHtml(formatCountOrNA(dept.openDisputes)) + '</strong></span>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+
+    return kpiHtml +
+      '<div class="section">' +
+        '<div class="section-title">Departments</div>' +
+        '<div class="list-grid">' + (deptCards || '<div class="empty-state">No departments found.</div>') + '</div>' +
+      '</div>';
+  }
+
+  function bindOverviewClicks() {
+    Array.prototype.slice.call(document.querySelectorAll('[data-open-dept]')).forEach(function (card) {
+      card.addEventListener('click', function () {
+        openDepartment(card.getAttribute('data-open-dept'));
+      });
+    });
+  }
+
+  function renderDepartmentView(deptResult) {
+    var kpis = deptResult.kpis || {};
+
+    var kpiHtml =
+      '<div class="kpi-grid">' +
+        kpiCard('Average Score', formatScore(kpis.averageScore)) +
+        kpiCard('Total Audits', formatCount(kpis.totalAudits)) +
+        kpiCard('Total Agents', formatCount(kpis.totalAgents)) +
+        kpiCard('Total Coachings', formatCount(kpis.totalCoachings)) +
+        kpiCard('Open Disputes', formatCountOrNA(kpis.openDisputes)) +
+      '</div>';
+
+    var trendPlaceholder =
+      '<div class="section"><div class="section-title">Performance Trend</div>' +
+        '<div class="card" style="padding: var(--space-6); text-align:center; color: var(--text-faint);">' +
+          'Trend chart placeholder &mdash; will plot weekly average score once multiple weeks of history are available.' +
+        '</div></div>';
+
+    var rootCauses = deptResult.topRootCauses || [];
+    var maxCount = rootCauses.reduce(function (max, item) { return Math.max(max, item.count); }, 0) || 1;
+    var rootCauseHtml = rootCauses.length
+      ? rootCauses.map(function (item) {
+          var widthPct = Math.round((item.count / maxCount) * 100);
+          return (
+            '<div class="root-cause-row">' +
+              '<span style="width:180px;">' + escapeHtml(item.rootCause) + '</span>' +
+              '<div class="root-cause-bar"><div class="root-cause-bar-fill" style="width:' + widthPct + '%;"></div></div>' +
+              '<span class="root-cause-count">' + item.count + '</span>' +
+            '</div>'
+          );
+        }).join('')
+      : '<div class="empty-state">No root causes recorded yet.</div>';
+
+    var topPerformers = deptResult.topPerformers || [];
+    var topPerformersHtml = topPerformers.length
+      ? topPerformers.map(function (agent) { return performerCard(agent, 'success'); }).join('')
+      : '<div class="empty-state">Not enough performance data yet.</div>';
+
+    var needsCoaching = deptResult.needsCoaching || [];
+    var needsCoachingHtml = needsCoaching.length
+      ? needsCoaching.map(function (agent) { return performerCard(agent, 'warning'); }).join('')
+      : '<div class="empty-state">Not enough performance data yet.</div>';
+
+    return kpiHtml + trendPlaceholder +
+      '<div class="section"><div class="section-title">Top Root Causes</div><div class="card" style="padding: var(--space-5);">' + rootCauseHtml + '</div></div>' +
+      '<div class="section"><div class="section-title">Top Performers</div><div class="list-grid">' + topPerformersHtml + '</div></div>' +
+      '<div class="section"><div class="section-title">Needs Coaching</div><div class="list-grid">' + needsCoachingHtml + '</div></div>';
+  }
+
+  function performerCard(agent, badgeType) {
+    return (
+      '<div class="card performer-card clickable" data-open-agent="' + escapeAttribute(agent.agentId) + '">' +
+        '<h3>' + escapeHtml(agent.name || agent.agentId) + '</h3>' +
+        '<div class="performer-meta">' +
+          '<span class="badge ' + badgeType + '">' + formatScore(agent.overallAverage) + ' avg</span>' +
+          '<span>Audits <strong>' + escapeHtml(formatCount(agent.totalAudits)) + '</strong></span>' +
+          '<span>Coachings <strong>' + escapeHtml(formatCount(agent.coachingCount)) + '</strong></span>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function bindDepartmentClicks() {
+    Array.prototype.slice.call(document.querySelectorAll('[data-open-agent]')).forEach(function (card) {
+      card.addEventListener('click', function () {
+        openAgent(card.getAttribute('data-open-agent'));
+      });
+    });
+  }
+
+  function renderAgentView(agentResult) {
+    var summary = agentResult.summary || {};
+    var histories = agentResult.histories || {};
+
+    var kpiHtml =
+      '<div class="kpi-grid">' +
+        kpiCard('Overall Average', formatScore(summary.overallAveragePerformance)) +
+        kpiCard('Coaching Count', formatCount(summary.coachingCount)) +
+        kpiCard('Open Actions', formatCountOrNA(summary.openActionCount)) +
+        kpiCard('Open Disputes', formatCountOrNA(summary.openDisputeCount)) +
+      '</div>';
+
+    var streamCards = (summary.performanceByStream || []).map(function (stream) {
+      if (!stream.hasData) {
+        return '<div class="card stream-card no-data"><h4>' + escapeHtml(stream.qaStream) + '</h4>No performance data yet.</div>';
+      }
+      return (
+        '<div class="card stream-card">' +
+          '<h4>' + escapeHtml(stream.qaStream) + '</h4>' +
+          '<div class="stream-row"><span>Week Ending</span><strong>' + escapeHtml(stream.weekEnding || '') + '</strong></div>' +
+          '<div class="stream-row"><span>Avg Score</span><strong>' + formatScore(stream.averageScore) + '</strong></div>' +
+          '<div class="stream-row"><span>Audits</span><strong>' + escapeHtml(toDisplayString(stream.numberOfAudits)) + '</strong></div>' +
+          '<div class="stream-row"><span>Root Cause</span><strong>' + escapeHtml(stream.primaryRootCause || 'N/A') + '</strong></div>' +
+        '</div>'
+      );
+    }).join('');
+
+    var timelineItems = buildTimelineItems(histories);
+    var timelineHtml = timelineItems.length
+      ? '<div class="timeline">' + timelineItems.map(renderTimelineItem).join('') + '</div>'
+      : '<div class="empty-state">No coaching or performance history yet.</div>';
+
+    var actionsHtml =
+      '<div class="actions-row" style="display:flex; gap: var(--space-3); margin-bottom: var(--space-5);">' +
+        '<button class="btn btn-primary btn-sm" data-quick-add="coaching">+ Add Coaching</button>' +
+        '<button class="btn btn-primary btn-sm" data-quick-add="performance">+ Add Performance</button>' +
+        '<button class="btn btn-primary btn-sm" data-quick-add="dispute">+ Add Dispute</button>' +
+      '</div>';
+
+    return actionsHtml + kpiHtml +
+      '<div class="section"><div class="section-title">Performance by QA Stream</div><div class="stream-grid">' + streamCards + '</div></div>' +
+      '<div class="section"><div class="section-title">Timeline</div><div class="card" style="padding: var(--space-5);">' + timelineHtml + '</div></div>';
+  }
+
+  function buildTimelineItems(histories) {
+    var items = [];
+
+    ((histories.performance && histories.performance.records) || []).forEach(function (record) {
+      items.push({
+        type: 'performance',
+        date: record['Week Ending'] || '',
+        title: (record['QA Stream'] || 'Performance') + ' \u2014 ' + formatScore(record['Average Score']),
+        desc: record['Primary Root Cause'] || ''
+      });
+    });
+
+    ((histories.coaching && histories.coaching.records) || []).forEach(function (record) {
+      items.push({
+        type: 'coaching',
+        date: record['Date'] || '',
+        title: 'Coaching session',
+        desc: firstNonEmpty(record, ['Notes', 'Summary', 'Reason', 'Outcome']) || ''
+      });
+    });
+
+    items.sort(function (a, b) {
+      return (b.date || '').localeCompare(a.date || '');
+    });
+
+    return items;
+  }
+
+  function firstNonEmpty(record, keys) {
+    for (var i = 0; i < keys.length; i += 1) {
+      if (record[keys[i]]) { return record[keys[i]]; }
+    }
+    return '';
+  }
+
+  function renderTimelineItem(item) {
+    return (
+      '<div class="timeline-item">' +
+        '<div class="timeline-dot ' + (item.type === 'coaching' ? 'coaching' : '') + '"></div>' +
+        '<div class="timeline-body">' +
+          '<div class="timeline-meta">' + escapeHtml(item.date) + '</div>' +
+          '<div class="timeline-title">' + escapeHtml(item.title) + '</div>' +
+          (item.desc ? '<div class="timeline-desc">' + escapeHtml(item.desc) + '</div>' : '') +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function bindAgentViewEvents() {
+    Array.prototype.slice.call(document.querySelectorAll('[data-quick-add]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        var agentResult = appState.agentCache[appState.dashboardAgentId];
+        var agent = agentResult ? agentResult.agent : null;
+        openModal(button.getAttribute('data-quick-add'), agent ? { agentId: agent.agentId, name: agent.name } : null);
+      });
+    });
+  }
+
+  function kpiCard(label, value) {
+    return (
+      '<div class="card kpi-card">' +
+        '<div class="kpi-label">' + escapeHtml(label) + '</div>' +
+        '<div class="kpi-value">' + escapeHtml(value) + '</div>' +
+      '</div>'
+    );
+  }
+
+  // ===========================================================================
+  // Weekly Review workflow
+  // ===========================================================================
+  function handleReviewDepartmentChange(event) {
+    var departmentId = event.target.value;
+    var agentSelect = document.getElementById('reviewAgent');
+    agentSelect.innerHTML = '<option value="">Select an agent</option>';
+    agentSelect.disabled = true;
+
+    if (!departmentId) { return; }
+
+    if (appState.agentsByDept[departmentId]) {
+      populateAgentSelect(agentSelect, appState.agentsByDept[departmentId]);
+      return;
+    }
+
+    callServer('getAgentsByDepartment', departmentId, function (result) {
+      appState.agentsByDept[departmentId] = result.agents || [];
+      populateAgentSelect(agentSelect, appState.agentsByDept[departmentId]);
+    });
+  }
+
+  function populateAgentSelect(select, agents) {
+    select.innerHTML = '<option value="">Select an agent</option>';
+    agents.forEach(function (agent) {
+      var option = document.createElement('option');
+      option.value = agent.agentId;
+      option.textContent = agent.name ? agent.name + ' (' + agent.agentId + ')' : agent.agentId;
+      select.appendChild(option);
+    });
+    select.disabled = !agents.length;
+  }
+
+  function extractNumbers(text) {
+    if (!text) { return []; }
+    var matches = text.match(/\d+(\.\d+)?/g);
+    if (!matches) { return []; }
+    return matches.map(Number).filter(function (n) { return !isNaN(n); });
+  }
+
+  function getAllAuditNumbers() {
+    var batch1 = extractNumbers(document.getElementById('auditBatch1').value);
+    var batch2 = extractNumbers(document.getElementById('auditBatch2').value);
+    var batch3 = extractNumbers(document.getElementById('auditBatch3').value);
+    return batch1.concat(batch2, batch3);
+  }
+
+  function updateLiveCalculation() {
+    var numbers = getAllAuditNumbers();
+    if (!numbers.length) {
+      document.getElementById('calcAverage').textContent = '\u2014';
+      document.getElementById('calcHighest').textContent = '\u2014';
+      document.getElementById('calcLowest').textContent = '\u2014';
+      document.getElementById('calcCount').textContent = '0';
+      return;
+    }
+    var sum = numbers.reduce(function (a, b) { return a + b; }, 0);
+    var avg = sum / numbers.length;
+    document.getElementById('calcAverage').textContent = avg.toFixed(2);
+    document.getElementById('calcHighest').textContent = Math.max.apply(null, numbers).toString();
+    document.getElementById('calcLowest').textContent = Math.min.apply(null, numbers).toString();
+    document.getElementById('calcCount').textContent = String(numbers.length);
+  }
+
+  function handleGenerateReview() {
+    var numbers = getAllAuditNumbers();
+    var stream = document.getElementById('reviewQaStream').value || 'the selected stream';
+    var rootCause = document.getElementById('reviewRootCause').value;
+
+    if (!numbers.length) {
+      showStatus('Add at least one audit score before generating a review.', 'error');
+      return;
+    }
+
+    var sum = numbers.reduce(function (a, b) { return a + b; }, 0);
+    var avg = (sum / numbers.length).toFixed(2);
+    var highest = Math.max.apply(null, numbers);
+    var lowest = Math.min.apply(null, numbers);
+
+    var summary = 'This week\u2019s ' + stream + ' audits (' + numbers.length + ' total) averaged ' + avg +
+      ', ranging from ' + lowest + ' to ' + highest + '.' +
+      (rootCause ? ' The primary root cause identified was: ' + rootCause + '.' : '') +
+      ' Continue monitoring trends week over week and follow up on any recurring issues during the next coaching session.';
+
+    document.getElementById('reviewSummary').value = summary;
+    showStatus('Draft review generated. Edit as needed before saving.', 'success');
+  }
+
+  function handleSaveReview() {
+    var weekEnding = document.getElementById('reviewWeekEnding').value;
+    var qaStream = document.getElementById('reviewQaStream').value;
+    var agentId = document.getElementById('reviewAgent').value;
+    var rootCause = document.getElementById('reviewRootCause').value;
+    var summary = document.getElementById('reviewSummary').value;
+    var numbers = getAllAuditNumbers();
+
+    if (!agentId) {
+      showStatus('Select a department and agent before saving.', 'error');
+      return;
+    }
+    if (!weekEnding) {
+      showStatus('Week Ending is required.', 'error');
+      return;
+    }
+    if (!qaStream) {
+      showStatus('QA Stream is required.', 'error');
+      return;
+    }
+    if (!numbers.length) {
+      showStatus('Add at least one audit score in one of the audit boxes.', 'error');
+      return;
+    }
+
+    var sum = numbers.reduce(function (a, b) { return a + b; }, 0);
+    var averageScore = (sum / numbers.length).toFixed(2);
+
+    var schema = appState.initialData && appState.initialData.forms ? appState.initialData.forms.performance : null;
+    var values = {};
+    values[findHeaderName(schema, /^weekending/, 'Week Ending')] = weekEnding;
+    values[findHeaderName(schema, /^qastream/, 'QA Stream')] = qaStream;
+    values[findHeaderName(schema, /^averagescore/, 'Average Score')] = averageScore;
+    values[findHeaderName(schema, /^numberofaudits/, 'Number of Audits')] = String(numbers.length);
+    values[findHeaderName(schema, /^primaryrootcause/, 'Primary Root Cause')] = rootCause;
+    values[findHeaderName(schema, /^qasummary/, 'QA Summary')] = summary;
+
+    var payload = { agentId: agentId, values: values };
+
+    document.getElementById('saveReviewButton').disabled = true;
+    showStatus('Saving weekly review...', 'info');
+    callServer('savePerformance', payload, function (result) {
+      showStatus(result.message || 'Weekly review saved.', 'success');
+      resetWeeklyReviewForm();
+      invalidateCachesForAgent(agentId);
+    }, function () {
+      document.getElementById('saveReviewButton').disabled = false;
+    });
+  }
+
+  function findHeaderName(schema, normalizedPattern, fallback) {
+    if (schema && schema.headers) {
+      var match = schema.headers.find(function (header) {
+        return normalizedPattern.test(normalizeForMatch(header));
+      });
+      if (match) { return match; }
+    }
+    return fallback;
+  }
+
+  function normalizeForMatch(value) {
+    return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  function resetWeeklyReviewForm() {
+    document.getElementById('auditBatch1').value = '';
+    document.getElementById('auditBatch2').value = '';
+    document.getElementById('auditBatch3').value = '';
+    document.getElementById('reviewRootCause').value = '';
+    document.getElementById('reviewSummary').value = '';
+    document.getElementById('saveReviewButton').disabled = false;
+    updateLiveCalculation();
+  }
+
+  function invalidateCachesForAgent(agentId) {
+    delete appState.agentCache[agentId];
+    appState.departmentCache = {};
+    appState.dashboardOverviewCache = null;
+    appState.logCache = {};
+  }
+
+  // ===========================================================================
+  // Standalone log pages (Coachings / Performance / Disputes)
+  // ===========================================================================
+  var logConfig = {
+    coaching: { method: 'getAllCoachingRecords', shellId: 'coachingTableShell' },
+    performance: { method: 'getAllPerformanceRecords', shellId: 'performanceTableShell' },
+    dispute: { method: 'getAllDisputeRecords', shellId: 'disputeTableShell' }
+  };
+
+  function loadLog(logType) {
+    if (appState.logCache[logType]) {
+      renderLogTable(logType, '');
+      return;
+    }
+    var shell = document.getElementById(logConfig[logType].shellId);
+    shell.innerHTML = '<div class="empty-state">Loading...</div>';
+    callServer(logConfig[logType].method, undefined, function (result) {
+      appState.logCache[logType] = result;
+      renderLogTable(logType, '');
+    });
+  }
+
+  function renderLogTable(logType, searchTerm) {
+    var result = appState.logCache[logType];
+    var shell = document.getElementById(logConfig[logType].shellId);
+    if (!result) { return; }
+
+    var headers = (result.headers || []).concat(['agentName' in (result.records[0] || {}) ? null : null]).filter(Boolean);
+    var displayHeaders = (result.headers || []).slice();
+    if (displayHeaders.indexOf('Agent Name') === -1) {
+      displayHeaders = ['Agent Name'].concat(displayHeaders.filter(function (h) { return normalizeForMatch(h) !== 'name'; }));
+    }
+
+    var normalizedSearch = (searchTerm || '').toLowerCase().trim();
+    var records = (result.records || []).filter(function (record) {
+      if (!normalizedSearch) { return true; }
+      return Object.keys(record).some(function (key) {
+        return toDisplayString(record[key]).toLowerCase().indexOf(normalizedSearch) !== -1;
+      });
+    });
+
+    if (!displayHeaders.length) {
+      shell.innerHTML = '<div class="empty-state">This log sheet does not have a header row yet.</div>';
+      return;
+    }
+
+    if (!records.length) {
+      shell.innerHTML = '<div class="table-shell"><div class="empty-state">No records found.</div></div>';
+      return;
+    }
+
+    var tableHeader = displayHeaders.map(function (header) {
+      return '<th>' + escapeHtml(header) + '</th>';
+    }).join('');
+
+    var tableRows = records.map(function (record) {
+      var cells = displayHeaders.map(function (header) {
+        var value = header === 'Agent Name' ? record.agentName : record[header];
+        return '<td>' + escapeHtml(toDisplayString(value)) + '</td>';
+      }).join('');
+      return '<tr>' + cells + '</tr>';
+    }).join('');
+
+    shell.innerHTML =
+      '<div class="table-shell"><table><thead><tr>' + tableHeader + '</tr></thead><tbody>' + tableRows + '</tbody></table></div>';
+  }
+
+  // ===========================================================================
+  // Shared modal (Add Coaching / Performance / Dispute)
+  // ===========================================================================
+  function openModal(formType, context) {
+    var schema = appState.initialData && appState.initialData.forms ? appState.initialData.forms[formType] : null;
+    if (!schema) {
+      showStatus('Form definitions are still loading. Try again in a moment.', 'error');
+      return;
+    }
+
+    appState.activeFormType = formType;
+    appState.modalContext = context || null;
+    setModalSavingState(false);
+    document.getElementById('modalTitle').textContent = formConfig[formType].title;
+    document.getElementById('modalBody').innerHTML = buildModalMarkup(schema.fields || [], context);
+    document.getElementById('modalBackdrop').classList.add('open');
+
+    if (!context) {
+      bindModalAgentPicker();
+    }
+  }
+
+  function buildModalMarkup(fields, context) {
+    var agentSectionHtml;
+    if (context && context.agentId) {
+      agentSectionHtml =
+        '<div class="modal-agent-context">Saving for <strong>' + escapeHtml(context.name || context.agentId) +
+        '</strong> (' + escapeHtml(context.agentId) + ')</div>';
+    } else {
+      var departments = (appState.initialData && appState.initialData.departments) || [];
+      var deptOptions = departments.map(function (department) {
+        return '<option value="' + escapeAttribute(department.departmentId) + '">' + escapeHtml(department.departmentName) + '</option>';
+      }).join('');
+      agentSectionHtml =
+        '<div class="form-grid">' +
+          '<div class="field-group"><label>Department</label>' +
+            '<select id="modalDepartmentSelect"><option value="">Select a department</option>' + deptOptions + '</select>' +
+          '</div>' +
+          '<div class="field-group"><label>Agent</label>' +
+            '<select id="modalAgentSelect" disabled><option value="">Select an agent</option></select>' +
+          '</div>' +
+        '</div>';
+    }
+
+    var fieldsHtml = fields.map(function (field) {
+      var inputMarkup = '';
+      if (field.type === 'textarea') {
+        inputMarkup = '<textarea name="' + escapeAttribute(field.name) + '"></textarea>';
+      } else if (field.type === 'select') {
+        var options = '<option value="">Select ' + escapeHtml(field.label) + '</option>' +
+          (field.options || []).map(function (opt) {
+            return '<option value="' + escapeAttribute(opt) + '">' + escapeHtml(opt) + '</option>';
+          }).join('');
+        inputMarkup = '<select name="' + escapeAttribute(field.name) + '">' + options + '</select>';
+      } else {
+        inputMarkup = '<input type="' + escapeAttribute(field.type) + '" name="' + escapeAttribute(field.name) + '" value="">';
+      }
+      return '<div class="field-group"><label>' + escapeHtml(field.label) + '</label>' + inputMarkup + '</div>';
+    }).join('');
+
+    return agentSectionHtml + fieldsHtml;
+  }
+
+  function bindModalAgentPicker() {
+    var departmentSelect = document.getElementById('modalDepartmentSelect');
+    var agentSelect = document.getElementById('modalAgentSelect');
+    if (!departmentSelect) { return; }
+
+    departmentSelect.addEventListener('change', function () {
+      var departmentId = departmentSelect.value;
+      agentSelect.innerHTML = '<option value="">Select an agent</option>';
+      agentSelect.disabled = true;
+      if (!departmentId) { return; }
+
+      if (appState.agentsByDept[departmentId]) {
+        populateAgentSelect(agentSelect, appState.agentsByDept[departmentId]);
+        return;
+      }
+
+      callServer('getAgentsByDepartment', departmentId, function (result) {
+        appState.agentsByDept[departmentId] = result.agents || [];
+        populateAgentSelect(agentSelect, appState.agentsByDept[departmentId]);
+      });
+    });
+  }
+
+  function closeModal() {
+    appState.activeFormType = '';
+    appState.modalContext = null;
+    document.getElementById('recordForm').reset();
+    setModalSavingState(false);
+    document.getElementById('modalBackdrop').classList.remove('open');
+  }
+
+  function handleRecordSave(event) {
+    event.preventDefault();
+
+    var formType = appState.activeFormType;
+    var config = formConfig[formType];
+    if (!config) { return; }
+
+    var agentId = appState.modalContext && appState.modalContext.agentId
+      ? appState.modalContext.agentId
+      : (document.getElementById('modalAgentSelect') ? document.getElementById('modalAgentSelect').value : '');
+
+    if (!agentId) {
+      showStatus('Select a department and agent before saving.', 'error');
+      return;
+    }
+
+    var schema = appState.initialData.forms[config.schemaKey];
+    var values = {};
+    (schema.fields || []).forEach(function (field) {
+      var element = document.getElementsByName(field.name)[0];
+      if (element) { values[field.name] = element.value; }
+    });
+
+    var payload = { agentId: agentId, values: values };
+
+    setModalSavingState(true);
+    callServer(config.method, payload, function (result) {
+      closeModal();
+      showStatus(result.message || (config.title + ' saved successfully.'), 'success');
+      invalidateCachesForAgent(agentId);
+      var currentPage = document.querySelector('.page-view.active').getAttribute('data-page-view');
+      if (currentPage === 'coachings' || currentPage === 'performance' || currentPage === 'disputes') {
+        loadLog(currentPage === 'coachings' ? 'coaching' : currentPage === 'performance' ? 'performance' : 'dispute');
+      }
+      if (currentPage === 'dashboard') {
+        loadDashboardOverview();
+        if (appState.dashboardView === 'agent') { openAgent(appState.dashboardAgentId); }
+        if (appState.dashboardView === 'department') { openDepartment(appState.dashboardDeptId); }
+      }
+    }, function () {
+      setModalSavingState(false);
+    });
+  }
+
+  function setModalSavingState(isSaving) {
+    document.getElementById('saveModalButton').disabled = isSaving;
+    document.getElementById('cancelModalButton').disabled = isSaving;
+    document.getElementById('closeModalButton').disabled = isSaving;
+    document.getElementById('saveModalButton').textContent = isSaving ? 'Saving...' : 'Save';
+  }
+
+  // ===========================================================================
+  // Reports (client-side rendering over existing endpoints)
+  // ===========================================================================
+  function generateReport(reportType) {
+    var output = document.getElementById('reportOutput');
+
+    if (reportType === 'weekly') {
+      if (!appState.dashboardOverviewCache) {
+        showStatus('Loading data for the report...', 'info');
+        callServer('getDashboardOverview', undefined, function (result) {
+          appState.dashboardOverviewCache = result;
+          renderWeeklyReport(result);
+        });
+        return;
+      }
+      renderWeeklyReport(appState.dashboardOverviewCache);
+      return;
+    }
+
+    var scopeSelector = '.report-scope-select[data-report-scope="' + reportType + '"]';
+    var select = document.querySelector(scopeSelector);
+    var departmentId = select ? select.value : '';
+    if (!departmentId) {
+      showStatus('Select a department for this report.', 'error');
+      return;
+    }
+
+    if (appState.departmentCache[departmentId]) {
+      renderScopedReport(reportType, appState.departmentCache[departmentId], departmentId);
+      return;
+    }
+
+    showStatus('Loading data for the report...', 'info');
+    callServer('getDepartmentDashboard', departmentId, function (result) {
+      appState.departmentCache[departmentId] = result;
+      renderScopedReport(reportType, result, departmentId);
+    });
+  }
+
+  function renderScopedReport(reportType, deptResult, departmentId) {
+    if (reportType === 'department') { renderDepartmentReport(deptResult); return; }
+    if (reportType === 'recognition') { renderRecognitionReport(deptResult); return; }
+    if (reportType === 'coaching') { renderCoachingReport(deptResult, departmentId); return; }
+  }
+
+  function renderWeeklyReport(overview) {
+    var output = document.getElementById('reportOutput');
+    var kpis = overview.kpis || {};
+    var lines = [];
+    lines.push('WEEKLY REPORT \u2014 Generated ' + new Date().toLocaleDateString());
+    lines.push('');
+    lines.push('Overall Average Score: ' + formatScore(kpis.averageScore));
+    lines.push('Total Audits: ' + formatCount(kpis.totalAudits));
+    lines.push('Total Agents: ' + formatCount(kpis.totalAgents));
+    lines.push('Total Coachings: ' + formatCount(kpis.totalCoachings));
+    lines.push('Open Disputes: ' + formatCountOrNA(kpis.openDisputes));
+    lines.push('');
+    lines.push('By Department:');
+    (overview.departments || []).forEach(function (dept) {
+      lines.push('  \u2022 ' + dept.departmentName + ' \u2014 avg ' + formatScore(dept.averageScore) +
+        ', ' + formatCount(dept.totalAgents) + ' agents, ' + formatCount(dept.totalAudits) + ' audits');
+    });
+
+    showReportOutput('Weekly Report', lines.join('\n'));
+  }
+
+  function renderDepartmentReport(deptResult) {
+    var kpis = deptResult.kpis || {};
+    var lines = [];
+    lines.push('DEPARTMENT REPORT \u2014 ' + deptResult.department.departmentName);
+    lines.push('Generated ' + new Date().toLocaleDateString());
+    lines.push('');
+    lines.push('Average Score: ' + formatScore(kpis.averageScore));
+    lines.push('Total Audits: ' + formatCount(kpis.totalAudits));
+    lines.push('Total Agents: ' + formatCount(kpis.totalAgents));
+    lines.push('Total Coachings: ' + formatCount(kpis.totalCoachings));
+    lines.push('Open Disputes: ' + formatCountOrNA(kpis.openDisputes));
+    lines.push('');
+    lines.push('Top Root Causes:');
+    (deptResult.topRootCauses || []).forEach(function (item) {
+      lines.push('  \u2022 ' + item.rootCause + ' (' + item.count + ')');
+    });
+    lines.push('');
+    lines.push('Top Performers:');
+    (deptResult.topPerformers || []).forEach(function (agent) {
+      lines.push('  \u2022 ' + (agent.name || agent.agentId) + ' \u2014 ' + formatScore(agent.overallAverage));
+    });
+    lines.push('');
+    lines.push('Needs Coaching:');
+    (deptResult.needsCoaching || []).forEach(function (agent) {
+      lines.push('  \u2022 ' + (agent.name || agent.agentId) + ' \u2014 ' + formatScore(agent.overallAverage));
+    });
+
+    showReportOutput('Department Report \u2014 ' + deptResult.department.departmentName, lines.join('\n'));
+  }
+
+  function renderRecognitionReport(deptResult) {
+    var lines = [];
+    lines.push('RECOGNITION REPORT \u2014 ' + deptResult.department.departmentName);
+    lines.push('Generated ' + new Date().toLocaleDateString());
+    lines.push('');
+    var performers = deptResult.topPerformers || [];
+    if (!performers.length) {
+      lines.push('Not enough performance data yet to recognize top performers.');
+    } else {
+      performers.forEach(function (agent, index) {
+        lines.push((index + 1) + '. ' + (agent.name || agent.agentId) + ' \u2014 average score ' + formatScore(agent.overallAverage) +
+          ', ' + formatCount(agent.totalAudits) + ' audits reviewed');
+      });
+    }
+
+    showReportOutput('Recognition Report \u2014 ' + deptResult.department.departmentName, lines.join('\n'));
+  }
+
+  function renderCoachingReport(deptResult, departmentId) {
+    var agentsPromiseKey = departmentId;
+    if (appState.agentsByDept[agentsPromiseKey]) {
+      buildCoachingReportBody(deptResult, appState.agentsByDept[agentsPromiseKey]);
+      return;
+    }
+    callServer('getAgentsByDepartment', departmentId, function (result) {
+      appState.agentsByDept[agentsPromiseKey] = result.agents || [];
+      buildCoachingReportBody(deptResult, appState.agentsByDept[agentsPromiseKey]);
+    });
+  }
+
+  function buildCoachingReportBody(deptResult, agents) {
+    var agentIds = agents.map(function (agent) { return agent.agentId; });
+
+    if (appState.logCache.coaching) {
+      renderCoachingReportLines(deptResult, agents, agentIds, appState.logCache.coaching);
+      return;
+    }
+
+    callServer('getAllCoachingRecords', undefined, function (result) {
+      appState.logCache.coaching = result;
+      renderCoachingReportLines(deptResult, agents, agentIds, result);
+    });
+  }
+
+  function renderCoachingReportLines(deptResult, agents, agentIds, coachingLog) {
+    var agentNameById = {};
+    agents.forEach(function (agent) { agentNameById[agent.agentId] = agent.name; });
+
+    var relevantRecords = (coachingLog.records || []).filter(function (record) {
+      return agentIds.indexOf(record['Agent ID']) !== -1;
+    });
+
+    var lines = [];
+    lines.push('COACHING REPORT \u2014 ' + deptResult.department.departmentName);
+    lines.push('Generated ' + new Date().toLocaleDateString());
+    lines.push('');
+    lines.push('Total coaching sessions: ' + relevantRecords.length);
+    lines.push('');
+
+    if (!relevantRecords.length) {
+      lines.push('No coaching sessions recorded for this department yet.');
+    } else {
+      relevantRecords.forEach(function (record) {
+        var agentName = agentNameById[record['Agent ID']] || record['Agent ID'];
+        var desc = firstNonEmpty(record, ['Notes', 'Summary', 'Reason', 'Outcome']) || '';
+        lines.push('  \u2022 ' + (record['Date'] || '') + ' \u2014 ' + agentName + (desc ? ': ' + desc : ''));
+      });
+    }
+
+    showReportOutput('Coaching Report \u2014 ' + deptResult.department.departmentName, lines.join('\n'));
+  }
+
+  function showReportOutput(title, text) {
+    var output = document.getElementById('reportOutput');
+    output.style.display = 'block';
+    output.innerHTML = '<h3>' + escapeHtml(title) + '</h3>' +
+      '<div>' + escapeHtml(text) + '</div>' +
+      '<div style="margin-top: var(--space-5);"><button class="btn btn-secondary btn-sm" onclick="window.print()">Print / Save as PDF</button></div>';
+    output.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    showStatus('Report generated.', 'success');
+  }
+
+  // ===========================================================================
+  // Shared utilities
+  // ===========================================================================
+  function callServer(methodName, payload, onSuccess, onFailure) {
+    var runner = google.script.run
+      .withSuccessHandler(function (result) {
+        if (!result || result.success === false) {
+          showStatus((result && result.message) || 'An unexpected server error occurred.', 'error');
+          if (typeof onFailure === 'function') { onFailure(result); }
+          return;
+        }
+        if (typeof onSuccess === 'function') { onSuccess(result); }
+      })
+      .withFailureHandler(function (error) {
+        showStatus(error && error.message ? error.message : 'Unable to complete the request.', 'error');
+        if (typeof onFailure === 'function') { onFailure(error); }
       });
 
-      function bindEvents() {
-        document.getElementById('departmentSelect').addEventListener('change', handleDepartmentChange);
-        document.getElementById('agentSelect').addEventListener('change', handleAgentChange);
-        document.getElementById('recordForm').addEventListener('submit', handleRecordSave);
-        document.getElementById('closeModalButton').addEventListener('click', closeModal);
-        document.getElementById('cancelModalButton').addEventListener('click', closeModal);
-        document.getElementById('modalBackdrop').addEventListener('click', function (event) {
-          if (event.target.id === 'modalBackdrop') {
-            closeModal();
-          }
-        });
+    if (typeof payload === 'undefined') {
+      runner[methodName]();
+    } else {
+      runner[methodName](payload);
+    }
+  }
 
-        Array.prototype.slice.call(document.querySelectorAll('[data-form-type]')).forEach(function (button) {
-          button.addEventListener('click', function () {
-            openModal(button.getAttribute('data-form-type'));
-          });
-        });
+  function showStatus(message, type) {
+    var banner = document.getElementById('statusBanner');
+    banner.textContent = message;
+    banner.className = 'status-banner visible ' + (type || 'info');
+  }
 
-        Array.prototype.slice.call(document.querySelectorAll('[data-tab]')).forEach(function (button) {
-          button.addEventListener('click', function () {
-            setActiveTab(button.getAttribute('data-tab'));
-          });
-        });
-      }
+  function formatScore(value) {
+    if (value === null || value === undefined || value === '') { return 'N/A'; }
+    return Number(value).toFixed(2);
+  }
 
-      function loadInitialData() {
-        showStatus('Loading departments and form definitions...', 'info');
-        callServer('getInitialData', undefined, function (result) {
-          appState.initialData = result;
-          renderDepartments(result.departments || []);
-          renderHistory();
-          showStatus('Ready. Select a department to begin.', 'success');
-        });
-      }
+  function formatCount(value) {
+    if (value === null || value === undefined || value === '') { return '0'; }
+    return String(value);
+  }
 
-      function handleDepartmentChange(event) {
-        appState.selectedDepartmentId = event.target.value;
-        appState.selectedAgentId = '';
-        appState.currentDashboard = null;
-        renderAgents([]);
-        resetDashboard();
+  function formatCountOrNA(value) {
+    if (value === null || value === undefined || value === '') { return 'N/A'; }
+    return String(value);
+  }
 
-        if (!appState.selectedDepartmentId) {
-          showStatus('Select a department to load its agents.', 'info');
-          return;
-        }
+  function toDisplayString(value) {
+    if (value === null || value === undefined || value === '') { return ''; }
+    return String(value);
+  }
 
-        showStatus('Loading agents...', 'info');
-        callServer('getAgentsByDepartment', appState.selectedDepartmentId, function (result) {
-          appState.agents = result.agents || [];
-          renderAgents(appState.agents);
-          if (appState.agents.length) {
-            showStatus('Agents loaded. Select an agent to view the dashboard.', 'success');
-          } else {
-            showStatus('No agents were found for the selected department.', 'info');
-          }
-        });
-      }
+  function escapeHtml(value) {
+    return toDisplayString(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
 
-      function handleAgentChange(event) {
-        appState.selectedAgentId = event.target.value;
-        appState.currentDashboard = null;
-        renderActionButtons();
-        renderHistory();
-
-        if (!appState.selectedAgentId) {
-          resetDashboard();
-          showStatus('Select an agent to load performance, coaching, and dispute data.', 'info');
-          return;
-        }
-
-        loadAgentDashboard(appState.selectedAgentId, false);
-      }
-
-      function loadAgentDashboard(agentId, preserveMessage) {
-        showStatus('Loading agent dashboard...', 'info');
-        callServer('getAgentDashboard', agentId, function (result) {
-          appState.currentDashboard = result;
-          renderDashboard(result);
-          if (!preserveMessage) {
-            showStatus('Agent dashboard refreshed.', 'success');
-          }
-        });
-      }
-
-      function renderDepartments(departments) {
-        var select = document.getElementById('departmentSelect');
-        select.innerHTML = '<option value="">Select a department</option>';
-
-        departments.forEach(function (department) {
-          var option = document.createElement('option');
-          option.value = department.departmentId;
-          option.textContent = department.departmentName || department.departmentId;
-          select.appendChild(option);
-        });
-      }
-
-      function renderAgents(agents) {
-        var select = document.getElementById('agentSelect');
-        select.innerHTML = '<option value="">Select an agent</option>';
-        select.disabled = !agents.length;
-
-        agents.forEach(function (agent) {
-          var option = document.createElement('option');
-          option.value = agent.agentId;
-          option.textContent = agent.name ? agent.name + ' (' + agent.agentId + ')' : agent.agentId;
-          select.appendChild(option);
-        });
-      }
-
-      function renderDashboard(dashboard) {
-        var summary = dashboard.summary || {};
-        var agent = dashboard.agent || {};
-
-        document.getElementById('summaryAgent').textContent = agent.name || agent.agentId || 'Unknown';
-        document.getElementById('summaryOverallAverage').textContent = formatScoreValue(summary.overallAveragePerformance);
-        document.getElementById('summaryCoachingCount').textContent = String(summary.coachingCount || 0);
-        document.getElementById('summaryLatestCoaching').textContent = summary.mostRecentCoaching || 'None';
-        document.getElementById('summaryLatestPerformance').textContent = summary.mostRecentPerformance || 'None';
-        document.getElementById('summaryOpenDisputes').textContent =
-          summary.openDisputeCount === null || summary.openDisputeCount === undefined
-            ? 'N/A'
-            : String(summary.openDisputeCount);
-
-        renderAgentDetails(agent);
-        renderStreamGrid(summary.performanceByStream || []);
-        renderActionButtons();
-        renderHistory();
-      }
-
-      function renderStreamGrid(streams) {
-        var streamGrid = document.getElementById('streamGrid');
-
-        if (!streams.length) {
-          streamGrid.innerHTML = '<div class="stream-card no-data">Select an agent to load performance by stream.</div>';
-          return;
-        }
-
-        streamGrid.innerHTML = streams.map(function (stream) {
-          if (!stream.hasData) {
-            return (
-              '<div class="stream-card no-data">' +
-                '<h3>' + escapeHtml(stream.qaStream) + '</h3>' +
-                'No performance data yet.' +
-              '</div>'
-            );
-          }
-
-          return (
-            '<div class="stream-card">' +
-              '<h3>' + escapeHtml(stream.qaStream) + '</h3>' +
-              '<div class="stream-row"><span>Week Ending</span><strong>' + escapeHtml(stream.weekEnding || '') + '</strong></div>' +
-              '<div class="stream-row"><span>Avg Score</span><strong>' + escapeHtml(formatScoreValue(stream.averageScore)) + '</strong></div>' +
-              '<div class="stream-row"><span>Audits</span><strong>' + escapeHtml(toDisplayString(stream.numberOfAudits)) + '</strong></div>' +
-              '<div class="stream-row"><span>Root Cause</span><strong>' + escapeHtml(stream.primaryRootCause || 'N/A') + '</strong></div>' +
-            '</div>'
-          );
-        }).join('');
-      }
-
-      function renderAgentDetails(agent) {
-        var detailsContainer = document.getElementById('agentDetails');
-        var detailEntries = [
-          { label: 'Agent ID', value: agent.agentId || '' },
-          { label: 'Department', value: agent.departmentName || agent.departmentId || '' },
-          { label: 'Supervisor', value: agent.supervisor || '' },
-          { label: 'Start Date', value: agent.startDate || '' },
-          { label: 'Status', value: agent.status || '' }
-        ].filter(function (item) {
-          return item.value;
-        });
-
-        if (!detailEntries.length) {
-          detailsContainer.innerHTML =
-            '<div class="detail-item"><span>Status</span><strong>Select an agent to load details.</strong></div>';
-          return;
-        }
-
-        detailsContainer.innerHTML = detailEntries.map(function (item) {
-          return (
-            '<div class="detail-item">' +
-              '<span>' + escapeHtml(item.label) + '</span>' +
-              '<strong>' + escapeHtml(item.value) + '</strong>' +
-            '</div>'
-          );
-        }).join('');
-      }
-
-      function renderActionButtons() {
-        var disabled = !appState.selectedAgentId;
-        document.getElementById('addCoachingButton').disabled = disabled;
-        document.getElementById('addPerformanceButton').disabled = disabled;
-        document.getElementById('addDisputeButton').disabled = disabled;
-      }
-
-      function setActiveTab(tabName) {
-        appState.activeTab = tabName;
-        Array.prototype.slice.call(document.querySelectorAll('[data-tab]')).forEach(function (button) {
-          button.classList.toggle('active', button.getAttribute('data-tab') === tabName);
-        });
-        renderHistory();
-      }
-
-      function renderHistory() {
-        var historyContent = document.getElementById('historyContent');
-        var dashboard = appState.currentDashboard;
-
-        if (!dashboard || !dashboard.histories || !dashboard.histories[appState.activeTab]) {
-          historyContent.innerHTML = '<div class="empty-state">Select an agent to view history.</div>';
-          return;
-        }
-
-        var historyBlock = dashboard.histories[appState.activeTab];
-        var headers = historyBlock.headers || [];
-        var records = historyBlock.records || [];
-
-        if (!headers.length) {
-          historyContent.innerHTML =
-            '<div class="empty-state">The selected log sheet does not contain a header row yet.</div>';
-          return;
-        }
-
-        if (!records.length) {
-          historyContent.innerHTML = '<div class="empty-state">No records found for this agent.</div>';
-          return;
-        }
-
-        var tableHeader = headers.map(function (header) {
-          return '<th>' + escapeHtml(header) + '</th>';
-        }).join('');
-
-        var tableRows = records.map(function (record) {
-          var cells = headers.map(function (header) {
-            return '<td>' + escapeHtml(toDisplayString(record[header])) + '</td>';
-          }).join('');
-          return '<tr>' + cells + '</tr>';
-        }).join('');
-
-        historyContent.innerHTML =
-          '<div class="table-shell">' +
-            '<table>' +
-              '<thead><tr>' + tableHeader + '</tr></thead>' +
-              '<tbody>' + tableRows + '</tbody>' +
-            '</table>' +
-          '</div>';
-      }
-
-      function openModal(formType) {
-        if (!appState.selectedAgentId) {
-          showStatus('Select an agent before adding a new record.', 'error');
-          return;
-        }
-
-        var schema = getFormSchema(formType);
-        if (!schema || !(schema.fields || []).length) {
-          showStatus('The selected log sheet has no headers available for data entry.', 'error');
-          return;
-        }
-
-        appState.activeFormType = formType;
-        setModalSavingState(false);
-        document.getElementById('modalTitle').textContent = formConfig[formType].title;
-        document.getElementById('modalBody').innerHTML = buildFormMarkup(schema.fields);
-        document.getElementById('modalBackdrop').classList.add('open');
-      }
-
-      function closeModal() {
-        appState.activeFormType = '';
-        document.getElementById('recordForm').reset();
-        setModalSavingState(false);
-        document.getElementById('modalBackdrop').classList.remove('open');
-      }
-
-      function buildFormMarkup(fields) {
-        return fields.map(function (field) {
-          var commonAttributes =
-            'name="' + escapeAttribute(field.name) + '" ' +
-            'data-label="' + escapeAttribute(field.label) + '" ';
-
-          var inputMarkup = '';
-          if (field.type === 'textarea') {
-            inputMarkup = '<textarea ' + commonAttributes + '></textarea>';
-          } else if (field.type === 'select') {
-            var optionsMarkup = '<option value="">Select ' + escapeHtml(field.label) + '</option>' +
-              (field.options || []).map(function (optionValue) {
-                return '<option value="' + escapeAttribute(optionValue) + '">' + escapeHtml(optionValue) + '</option>';
-              }).join('');
-            inputMarkup = '<select ' + commonAttributes + '>' + optionsMarkup + '</select>';
-          } else {
-            inputMarkup =
-              '<input type="' + escapeAttribute(field.type) + '" ' +
-              'value="" ' +
-              commonAttributes +
-              '>';
-          }
-
-          return (
-            '<div class="field-group">' +
-              '<label>' + escapeHtml(field.label) + '</label>' +
-              inputMarkup +
-            '</div>'
-          );
-        }).join('');
-      }
-
-      function handleRecordSave(event) {
-        event.preventDefault();
-
-        var formType = appState.activeFormType;
-        var config = formConfig[formType];
-        if (!config) {
-          showStatus('The selected form type is not supported.', 'error');
-          return;
-        }
-
-        var schema = getFormSchema(formType);
-        var payload = {
-          agentId: appState.selectedAgentId,
-          values: collectFormValues(schema.fields || [])
-        };
-
-        setModalSavingState(true);
-        callServer(config.method, payload, function (result) {
-          closeModal();
-          showStatus(result.message || (config.title + ' saved successfully.'), 'success');
-          loadAgentDashboard(appState.selectedAgentId, true);
-        }, function () {
-          setModalSavingState(false);
-        });
-      }
-
-      function collectFormValues(fields) {
-        var values = {};
-        fields.forEach(function (field) {
-          var element = document.getElementsByName(field.name)[0];
-          if (element) {
-            values[field.name] = element.value;
-          }
-        });
-        return values;
-      }
-
-      function setModalSavingState(isSaving) {
-        document.getElementById('saveModalButton').disabled = isSaving;
-        document.getElementById('cancelModalButton').disabled = isSaving;
-        document.getElementById('closeModalButton').disabled = isSaving;
-        document.getElementById('saveModalButton').textContent = isSaving ? 'Saving...' : 'Save';
-      }
-
-      function getFormSchema(formType) {
-        return appState.initialData && appState.initialData.forms
-          ? appState.initialData.forms[formType]
-          : null;
-      }
-
-      function resetDashboard() {
-        document.getElementById('summaryAgent').textContent = 'None selected';
-        document.getElementById('summaryOverallAverage').textContent = 'N/A';
-        document.getElementById('summaryCoachingCount').textContent = '0';
-        document.getElementById('summaryLatestCoaching').textContent = 'None';
-        document.getElementById('summaryLatestPerformance').textContent = 'None';
-        document.getElementById('summaryOpenDisputes').textContent = 'N/A';
-        renderAgentDetails({});
-        renderStreamGrid([]);
-        renderActionButtons();
-        renderHistory();
-      }
-
-      function callServer(methodName, payload, onSuccess, onFailure) {
-        var runner = google.script.run
-          .withSuccessHandler(function (result) {
-            if (!result || result.success === false) {
-              showStatus((result && result.message) || 'An unexpected server error occurred.', 'error');
-              if (typeof onFailure === 'function') {
-                onFailure(result);
-              }
-              return;
-            }
-
-            if (typeof onSuccess === 'function') {
-              onSuccess(result);
-            }
-          })
-          .withFailureHandler(function (error) {
-            showStatus(error && error.message ? error.message : 'Unable to complete the request.', 'error');
-            if (typeof onFailure === 'function') {
-              onFailure(error);
-            }
-          });
-
-        if (typeof payload === 'undefined') {
-          runner[methodName]();
-        } else {
-          runner[methodName](payload);
-        }
-      }
-
-      function showStatus(message, type) {
-        var banner = document.getElementById('statusBanner');
-        banner.textContent = message;
-        banner.className = 'status-banner visible ' + (type || 'info');
-      }
-
-      function formatScoreValue(value) {
-        if (value === null || value === undefined || value === '') {
-          return 'N/A';
-        }
-
-        return Number(value).toFixed(2);
-      }
-
-      function toDisplayString(value) {
-        if (value === null || value === undefined || value === '') {
-          return '';
-        }
-        return String(value);
-      }
-
-      function escapeHtml(value) {
-        return toDisplayString(value)
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#39;');
-      }
-
-      function escapeAttribute(value) {
-        return escapeHtml(value);
-      }
-    </script>
-  </body>
+  function escapeAttribute(value) {
+    return escapeHtml(value);
+  }
+</script>
+</body>
 </html>
