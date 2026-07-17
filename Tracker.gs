@@ -4,7 +4,9 @@ var Tracker = (function () {
     agents: 'Agents',
     coachingLog: 'Coaching Log',
     performanceLog: 'Performance Log',
-    disputeLog: 'Dispute Log'
+    disputeLog: 'Dispute Log',
+    scorecardCriteria: 'Scorecard Criteria',
+    weeklyReviewDetail: 'Weekly Review Detail'
   };
 
   var FIELD_NAMES = {
@@ -28,8 +30,20 @@ var Tracker = (function () {
     date: 'Date',
     disputeStatus: 'Dispute Status',
     followUpDate: 'Follow-up Date',
-    followUpCompleted: 'Follow-up Completed'
+    followUpCompleted: 'Follow-up Completed',
+    secondaryRootCause: 'Secondary Root Cause',
+    detailId: 'Detail ID',
+    interactionId: 'Interaction ID',
+    auditDate: 'Audit Date',
+    score: 'Score',
+    failedCriteria: 'Failed Criteria',
+    comments: 'Comments',
+    criterionName: 'Criterion Name',
+    criterionWeight: 'Weight'
   };
+
+  var MIN_REQUIRED_AUDITS = 3;
+  var MAX_AUDITS = 5;
 
   var QA_STREAM_OPTIONS = ['Customer Voice', 'Customer Text', 'Clerk Support', 'D2C'];
 
@@ -53,6 +67,11 @@ var Tracker = (function () {
   ID_GENERATION_CONFIG[SHEETS.performanceLog] = {
     header: FIELD_NAMES.performanceId,
     prefix: 'PERF-',
+    padLength: 6
+  };
+  ID_GENERATION_CONFIG[SHEETS.weeklyReviewDetail] = {
+    header: FIELD_NAMES.detailId,
+    prefix: 'WRD-',
     padLength: 6
   };
 
@@ -327,6 +346,258 @@ var Tracker = (function () {
       topPerformers: topPerformers,
       needsCoaching: needsCoaching
     };
+  }
+
+  function getScorecardCriteria() {
+    var criteriaData = readSheet(SHEETS.scorecardCriteria);
+    var criteria = criteriaData.rows
+      .map(function (row) {
+        return {
+          name: toSafeString(getFieldValue(row, [FIELD_NAMES.criterionName])),
+          weight: toNumber(getFieldValue(row, [FIELD_NAMES.criterionWeight])) || 0
+        };
+      })
+      .filter(function (criterion) {
+        return criterion.name;
+      })
+      .sort(function (a, b) {
+        return a.name.localeCompare(b.name);
+      });
+
+    return {
+      success: true,
+      criteria: criteria
+    };
+  }
+
+  // Creates one Weekly Review (a Performance Log record) from 3-5 individual
+  // audits, each stored as its own Weekly Review Detail row linked back to
+  // the generated Performance ID. Statistics and the primary/secondary
+  // failed criteria are derived only from audits that were actually
+  // completed (i.e. have a Score) - blank optional audits are ignored.
+  //
+  // payload: {
+  //   agentId, weekEnding, qaStream, summary,
+  //   audits: [ { interactionId, auditDate, score, failedCriteria: [...], comments }, ... ]
+  // }
+  function saveWeeklyReview(payload) {
+    var agentId = toSafeString(payload && payload.agentId);
+    if (!agentId) {
+      throw new Error('Agent ID is required before saving a weekly review.');
+    }
+
+    var agentRow = getAgentRowOrThrow(agentId);
+    var agentName = toSafeString(getFieldValue(agentRow, [FIELD_NAMES.name]));
+
+    var weekEnding = toSafeString(payload && payload.weekEnding);
+    var qaStream = toSafeString(payload && payload.qaStream);
+    var summary = toSafeString(payload && payload.summary);
+    var rawAudits = (payload && payload.audits) || [];
+
+    if (!weekEnding) {
+      throw new Error('Week Ending is required.');
+    }
+    if (!qaStream) {
+      throw new Error('QA Stream is required.');
+    }
+
+    var completedAudits = rawAudits
+      .slice(0, MAX_AUDITS)
+      .map(normalizeAuditInput)
+      .filter(function (audit) {
+        return audit.hasScore;
+      });
+
+    if (completedAudits.length < MIN_REQUIRED_AUDITS) {
+      throw new Error('At least ' + MIN_REQUIRED_AUDITS + ' completed audits (with a Score) are required to save a weekly review.');
+    }
+
+    completedAudits.forEach(function (audit) {
+      if (typeof audit.score !== 'number' || isNaN(audit.score)) {
+        throw new Error('Every completed audit must include a numeric Score.');
+      }
+    });
+
+    var scores = completedAudits.map(function (audit) { return audit.score; });
+    var auditCount = scores.length;
+    var averageScore = roundNumber(scores.reduce(function (sum, value) { return sum + value; }, 0) / auditCount, 2);
+    var highestScore = Math.max.apply(null, scores);
+    var lowestScore = Math.min.apply(null, scores);
+
+    var rootCauses = computeTopFailedCriteria(completedAudits);
+
+    var performanceData = readSheet(SHEETS.performanceLog);
+    var performanceId = generateNextSequentialId(performanceData.rows, [FIELD_NAMES.performanceId], 'PERF-', 6);
+    var today = new Date();
+
+    var performanceRow = performanceData.headers.map(function (header) {
+      var normalized = normalizeHeader(header);
+
+      if (normalized === normalizeHeader(FIELD_NAMES.performanceId)) {
+        return performanceId;
+      }
+      if (normalized === normalizeHeader(FIELD_NAMES.agentId)) {
+        return agentId;
+      }
+      if (normalized === normalizeHeader(FIELD_NAMES.name)) {
+        return agentName;
+      }
+      if (isAutoFillDateHeader(header)) {
+        return coerceValueForSheet(header, today);
+      }
+      if (normalized === normalizeHeader(FIELD_NAMES.weekEnding)) {
+        return coerceValueForSheet(header, weekEnding);
+      }
+      if (normalized === normalizeHeader(FIELD_NAMES.qaStream)) {
+        return qaStream;
+      }
+      if (normalized === normalizeHeader(FIELD_NAMES.averageScore)) {
+        return averageScore;
+      }
+      if (normalized === normalizeHeader(FIELD_NAMES.numberOfAudits)) {
+        return auditCount;
+      }
+      if (normalized === normalizeHeader(FIELD_NAMES.primaryRootCause)) {
+        return rootCauses.primary;
+      }
+      if (normalized === normalizeHeader(FIELD_NAMES.secondaryRootCause)) {
+        return rootCauses.secondary;
+      }
+      if (normalized === normalizeHeader(FIELD_NAMES.qaSummary)) {
+        return summary;
+      }
+      return '';
+    });
+
+    performanceData.sheet.appendRow(performanceRow);
+
+    var detailData = readSheet(SHEETS.weeklyReviewDetail);
+    var nextDetailNumber = computeMaxSequentialNumber(detailData.rows, [FIELD_NAMES.detailId]);
+
+    completedAudits.forEach(function (audit) {
+      nextDetailNumber += 1;
+      var detailId = 'WRD-' + padNumber(nextDetailNumber, 6);
+
+      var detailRow = detailData.headers.map(function (header) {
+        var normalized = normalizeHeader(header);
+
+        if (normalized === normalizeHeader(FIELD_NAMES.detailId)) {
+          return detailId;
+        }
+        if (normalized === normalizeHeader(FIELD_NAMES.performanceId)) {
+          return performanceId;
+        }
+        if (normalized === normalizeHeader(FIELD_NAMES.agentId)) {
+          return agentId;
+        }
+        if (normalized === normalizeHeader(FIELD_NAMES.interactionId)) {
+          return audit.interactionId;
+        }
+        if (normalized === normalizeHeader(FIELD_NAMES.auditDate)) {
+          return coerceValueForSheet(header, audit.auditDate);
+        }
+        if (normalized === normalizeHeader(FIELD_NAMES.score)) {
+          return audit.score;
+        }
+        if (normalized === normalizeHeader(FIELD_NAMES.failedCriteria)) {
+          return audit.failedCriteria.join(', ');
+        }
+        if (normalized === normalizeHeader(FIELD_NAMES.comments)) {
+          return audit.comments;
+        }
+        return '';
+      });
+
+      detailData.sheet.appendRow(detailRow);
+    });
+
+    return {
+      success: true,
+      message: 'Weekly review saved successfully (' + performanceId + ') with ' + auditCount + ' audits.',
+      performanceId: performanceId,
+      averageScore: averageScore,
+      highestScore: highestScore,
+      lowestScore: lowestScore,
+      auditCount: auditCount,
+      primaryRootCause: rootCauses.primary,
+      secondaryRootCause: rootCauses.secondary
+    };
+  }
+
+  function normalizeAuditInput(rawAudit) {
+    var audit = rawAudit || {};
+    var scoreValue = toNumber(audit.score);
+    var failedCriteria = Array.isArray(audit.failedCriteria)
+      ? audit.failedCriteria.map(toSafeString).filter(function (value) { return value; })
+      : [];
+
+    return {
+      interactionId: toSafeString(audit.interactionId),
+      auditDate: audit.auditDate,
+      score: scoreValue,
+      hasScore: typeof scoreValue === 'number' && !isNaN(scoreValue),
+      failedCriteria: failedCriteria,
+      comments: toSafeString(audit.comments)
+    };
+  }
+
+  // Ranks failed criteria by how many completed audits cite them (each
+  // criterion counted at most once per audit), breaking ties using the
+  // criterion's Weight from the Scorecard Criteria sheet (higher wins).
+  function computeTopFailedCriteria(completedAudits) {
+    var counts = {};
+    completedAudits.forEach(function (audit) {
+      var uniqueCriteria = uniqueStrings(audit.failedCriteria);
+      uniqueCriteria.forEach(function (criterionName) {
+        counts[criterionName] = (counts[criterionName] || 0) + 1;
+      });
+    });
+
+    var criterionNames = Object.keys(counts);
+    if (!criterionNames.length) {
+      return { primary: '', secondary: '' };
+    }
+
+    var weightByName = {};
+    getScorecardCriteria().criteria.forEach(function (criterion) {
+      weightByName[normalizeHeader(criterion.name)] = criterion.weight;
+    });
+
+    var ranked = criterionNames
+      .map(function (name) {
+        return {
+          name: name,
+          count: counts[name],
+          weight: weightByName[normalizeHeader(name)] || 0
+        };
+      })
+      .sort(function (a, b) {
+        if (b.count !== a.count) {
+          return b.count - a.count;
+        }
+        if (b.weight !== a.weight) {
+          return b.weight - a.weight;
+        }
+        return a.name.localeCompare(b.name);
+      });
+
+    return {
+      primary: ranked[0] ? ranked[0].name : '',
+      secondary: ranked[1] ? ranked[1].name : ''
+    };
+  }
+
+  function uniqueStrings(values) {
+    var seen = {};
+    var result = [];
+    values.forEach(function (value) {
+      var key = normalizeHeader(value);
+      if (!seen[key]) {
+        seen[key] = true;
+        result.push(value);
+      }
+    });
+    return result;
   }
 
   function getAllCoachingRecords() {
@@ -747,6 +1018,11 @@ var Tracker = (function () {
   }
 
   function generateNextSequentialId(rows, headerCandidates, prefix, padLength) {
+    var maxNumber = computeMaxSequentialNumber(rows, headerCandidates);
+    return prefix + padNumber(maxNumber + 1, padLength);
+  }
+
+  function computeMaxSequentialNumber(rows, headerCandidates) {
     var maxNumber = 0;
 
     rows.forEach(function (row) {
@@ -760,7 +1036,7 @@ var Tracker = (function () {
       }
     });
 
-    return prefix + padNumber(maxNumber + 1, padLength);
+    return maxNumber;
   }
 
   function padNumber(number, length) {
@@ -1101,6 +1377,8 @@ var Tracker = (function () {
     getDepartmentDashboard: getDepartmentDashboard,
     getAllCoachingRecords: getAllCoachingRecords,
     getAllPerformanceRecords: getAllPerformanceRecords,
-    getAllDisputeRecords: getAllDisputeRecords
+    getAllDisputeRecords: getAllDisputeRecords,
+    getScorecardCriteria: getScorecardCriteria,
+    saveWeeklyReview: saveWeeklyReview
   };
 })();
