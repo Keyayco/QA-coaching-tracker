@@ -328,9 +328,31 @@
   .review-panel { padding: var(--space-5); }
   .review-panel + .review-panel { margin-top: var(--space-5); }
 
-  .audit-inputs { display: grid; gap: var(--space-4); }
-  .audit-input label { font-size: 12.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; display: block; }
-  .audit-input textarea { min-height: 76px; }
+  .audit-card {
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    padding: var(--space-4); background: var(--surface-alt); margin-bottom: var(--space-4);
+  }
+  .audit-card:last-child { margin-bottom: 0; }
+  .audit-card-header {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-3);
+  }
+  .audit-card-header h4 { font-size: 13.5px; font-weight: 700; }
+  .audit-card-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: var(--space-3); }
+  .audit-card .field-group textarea { min-height: 60px; }
+  .criteria-checklist {
+    display: flex; flex-wrap: wrap; gap: 6px 10px; max-height: 96px; overflow-y: auto;
+    border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-3);
+    background: var(--surface);
+  }
+  .criteria-checklist label {
+    display: flex; align-items: center; gap: 6px; font-weight: 400; font-size: 12.5px;
+    color: var(--text); white-space: nowrap;
+  }
+  .criteria-checklist input[type="checkbox"] { width: auto; }
+  .criteria-checklist .empty-state { padding: var(--space-2); font-size: 12px; }
+
+  .root-cause-preview { display: grid; gap: var(--space-3); grid-template-columns: 1fr 1fr; margin-bottom: var(--space-4); }
+  .root-cause-preview .field-group input[readonly] { font-weight: 600; color: var(--text); }
 
   .calc-panel { position: sticky; top: var(--space-6); }
   .calc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); margin-bottom: var(--space-4); }
@@ -477,30 +499,21 @@
               </div>
             </div>
 
-            <div class="audit-inputs">
-              <div class="audit-input">
-                <label>Audit Batch 1 &mdash; paste scores or notes (any numbers found are used)</label>
-                <textarea id="auditBatch1" placeholder="e.g. Call 1: 92, Call 2: 88, tone was professional..."></textarea>
-              </div>
-              <div class="audit-input">
-                <label>Audit Batch 2</label>
-                <textarea id="auditBatch2" placeholder="e.g. Ticket audits: 95, 90, 100..."></textarea>
-              </div>
-              <div class="audit-input">
-                <label>Audit Batch 3</label>
-                <textarea id="auditBatch3" placeholder="Optional additional audits..."></textarea>
-              </div>
-            </div>
+            <div id="auditCardsContainer"></div>
           </div>
 
           <div class="card review-panel">
-            <div class="form-grid">
+            <div class="root-cause-preview">
               <div class="field-group">
-                <label>Primary Root Cause</label>
-                <input type="text" id="reviewRootCause" placeholder="e.g. Missed verification step">
+                <label>Primary Failed Criterion (auto)</label>
+                <input type="text" id="primaryRootCauseDisplay" readonly value="&mdash;">
+              </div>
+              <div class="field-group">
+                <label>Secondary Failed Criterion (auto)</label>
+                <input type="text" id="secondaryRootCauseDisplay" readonly value="&mdash;">
               </div>
             </div>
-            <div class="field-group" style="margin-top: var(--space-4);">
+            <div class="field-group">
               <label>QA Summary / Overall Feedback</label>
               <textarea id="reviewSummary" style="min-height: 120px;" placeholder="Click Generate Review for a starting draft, then edit as needed."></textarea>
             </div>
@@ -519,7 +532,7 @@
             <div class="calc-stat"><div class="calc-value" id="calcLowest">&mdash;</div><div class="calc-label">Lowest</div></div>
             <div class="calc-stat"><div class="calc-value" id="calcCount">0</div><div class="calc-label">Audit Count</div></div>
           </div>
-          <p style="font-size:12px; color: var(--text-faint); margin:0;">Numbers are detected automatically from all three audit boxes. This becomes the Average Score and Number of Audits saved to the Performance Log &mdash; individual audit detail stays in Zendesk/Talkdesk/D2C.</p>
+          <p style="font-size:12px; color: var(--text-faint); margin:0;">Calculated live from every audit card that has a Score entered. Audits 1&ndash;3 are required; Audits 4 and 5 are optional and are ignored completely if left blank. Individual audit detail is saved as its own Weekly Review Detail record linked to this review.</p>
         </div>
       </div>
     </section>
@@ -659,6 +672,7 @@
     agentCache: {},              // agentId -> getAgentDashboard() result
     agentsByDept: {},            // departmentId -> agents[] (from getAgentsByDepartment)
     logCache: {},                // 'coaching' | 'performance' | 'dispute' -> full log result
+    scorecardCriteria: [],       // [{ name, weight }] from getScorecardCriteria()
     activeFormType: '',
     modalContext: null           // { agentId, name } when Add is launched with a known agent
   };
@@ -715,10 +729,6 @@
     document.getElementById('generateReviewButton').addEventListener('click', handleGenerateReview);
     document.getElementById('saveReviewButton').addEventListener('click', handleSaveReview);
 
-    ['auditBatch1', 'auditBatch2', 'auditBatch3'].forEach(function (id) {
-      document.getElementById(id).addEventListener('input', updateLiveCalculation);
-    });
-
     Array.prototype.slice.call(document.querySelectorAll('[data-report]')).forEach(function (button) {
       button.addEventListener('click', function () {
         generateReport(button.getAttribute('data-report'));
@@ -751,7 +761,15 @@
       appState.initialData = result;
       populateDepartmentSelects(result.departments || []);
       loadDashboardOverview();
+      loadScorecardCriteria();
       showStatus('Ready.', 'success');
+    });
+  }
+
+  function loadScorecardCriteria() {
+    callServer('getScorecardCriteria', undefined, function (result) {
+      appState.scorecardCriteria = result.criteria || [];
+      renderAuditCards();
     });
   }
 
@@ -1155,55 +1173,197 @@
     select.disabled = !agents.length;
   }
 
-  function extractNumbers(text) {
-    if (!text) { return []; }
-    var matches = text.match(/\d+(\.\d+)?/g);
-    if (!matches) { return []; }
-    return matches.map(Number).filter(function (n) { return !isNaN(n); });
+  var AUDIT_CARD_COUNT = 5;
+  var AUDIT_REQUIRED_COUNT = 3;
+
+  function renderAuditCards() {
+    var container = document.getElementById('auditCardsContainer');
+    var cardsHtml = '';
+    for (var i = 1; i <= AUDIT_CARD_COUNT; i += 1) {
+      cardsHtml += buildAuditCardMarkup(i);
+    }
+    container.innerHTML = cardsHtml;
+
+    for (var j = 1; j <= AUDIT_CARD_COUNT; j += 1) {
+      document.getElementById('auditScore' + j).addEventListener('input', updateLiveCalculation);
+    }
   }
 
-  function getAllAuditNumbers() {
-    var batch1 = extractNumbers(document.getElementById('auditBatch1').value);
-    var batch2 = extractNumbers(document.getElementById('auditBatch2').value);
-    var batch3 = extractNumbers(document.getElementById('auditBatch3').value);
-    return batch1.concat(batch2, batch3);
+  function buildAuditCardMarkup(index) {
+    var isOptional = index > AUDIT_REQUIRED_COUNT;
+    var criteriaOptions = (appState.scorecardCriteria || []).length
+      ? appState.scorecardCriteria.map(function (criterion) {
+          return '<label><input type="checkbox" name="auditCriteria' + index + '" value="' + escapeAttribute(criterion.name) + '"> ' + escapeHtml(criterion.name) + '</label>';
+        }).join('')
+      : '<div class="empty-state">No Scorecard Criteria found.</div>';
+
+    return (
+      '<div class="audit-card">' +
+        '<div class="audit-card-header">' +
+          '<h4>Audit ' + index + (isOptional ? ' <span class="badge neutral">Optional</span>' : '') + '</h4>' +
+        '</div>' +
+        '<div class="audit-card-grid">' +
+          '<div class="field-group"><label>Interaction ID</label><input type="text" id="auditInteraction' + index + '"></div>' +
+          '<div class="field-group"><label>Audit Date</label><input type="date" id="auditDate' + index + '"></div>' +
+          '<div class="field-group"><label>Score</label><input type="number" id="auditScore' + index + '" min="0" max="100"></div>' +
+        '</div>' +
+        '<div class="field-group" style="margin-bottom: var(--space-3);">' +
+          '<label>Failed Criteria</label>' +
+          '<div class="criteria-checklist" id="auditCriteria' + index + '">' + criteriaOptions + '</div>' +
+        '</div>' +
+        '<div class="field-group">' +
+          '<label>Comments / QA Notes</label>' +
+          '<textarea id="auditComments' + index + '"></textarea>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  // Reads one audit card's fields from the DOM. "attempted" means any field
+  // has been touched; "hasScore" (i.e. completed, for calculation purposes)
+  // means a numeric Score was entered.
+  function readAuditCard(index) {
+    var interactionId = document.getElementById('auditInteraction' + index).value.trim();
+    var auditDate = document.getElementById('auditDate' + index).value;
+    var scoreRaw = document.getElementById('auditScore' + index).value;
+    var comments = document.getElementById('auditComments' + index).value.trim();
+    var checkedBoxes = Array.prototype.slice.call(
+      document.querySelectorAll('#auditCriteria' + index + ' input[type="checkbox"]:checked')
+    );
+    var failedCriteria = checkedBoxes.map(function (box) { return box.value; });
+
+    var score = scoreRaw === '' ? null : Number(scoreRaw);
+    var hasScore = score !== null && !isNaN(score);
+    var attempted = !!(interactionId || auditDate || hasScore || comments || failedCriteria.length);
+
+    return {
+      index: index,
+      interactionId: interactionId,
+      auditDate: auditDate,
+      score: score,
+      hasScore: hasScore,
+      failedCriteria: failedCriteria,
+      comments: comments,
+      attempted: attempted
+    };
+  }
+
+  function readAllAuditCards() {
+    var audits = [];
+    for (var i = 1; i <= AUDIT_CARD_COUNT; i += 1) {
+      audits.push(readAuditCard(i));
+    }
+    return audits;
   }
 
   function updateLiveCalculation() {
-    var numbers = getAllAuditNumbers();
-    if (!numbers.length) {
+    var completedAudits = readAllAuditCards().filter(function (audit) { return audit.hasScore; });
+
+    if (!completedAudits.length) {
       document.getElementById('calcAverage').textContent = '\u2014';
       document.getElementById('calcHighest').textContent = '\u2014';
       document.getElementById('calcLowest').textContent = '\u2014';
       document.getElementById('calcCount').textContent = '0';
+      document.getElementById('primaryRootCauseDisplay').value = '\u2014';
+      document.getElementById('secondaryRootCauseDisplay').value = '\u2014';
       return;
     }
-    var sum = numbers.reduce(function (a, b) { return a + b; }, 0);
-    var avg = sum / numbers.length;
+
+    var scores = completedAudits.map(function (audit) { return audit.score; });
+    var sum = scores.reduce(function (a, b) { return a + b; }, 0);
+    var avg = sum / scores.length;
+
     document.getElementById('calcAverage').textContent = avg.toFixed(2);
-    document.getElementById('calcHighest').textContent = Math.max.apply(null, numbers).toString();
-    document.getElementById('calcLowest').textContent = Math.min.apply(null, numbers).toString();
-    document.getElementById('calcCount').textContent = String(numbers.length);
+    document.getElementById('calcHighest').textContent = Math.max.apply(null, scores).toString();
+    document.getElementById('calcLowest').textContent = Math.min.apply(null, scores).toString();
+    document.getElementById('calcCount').textContent = String(scores.length);
+
+    var rootCauses = computeTopFailedCriteriaClientSide(completedAudits);
+    document.getElementById('primaryRootCauseDisplay').value = rootCauses.primary || '\u2014';
+    document.getElementById('secondaryRootCauseDisplay').value = rootCauses.secondary || '\u2014';
+  }
+
+  // Mirrors the server-side tie-break logic (frequency desc, then Scorecard
+  // Criteria weight desc) so the live preview matches what will be saved.
+  function computeTopFailedCriteriaClientSide(completedAudits) {
+    var counts = {};
+    completedAudits.forEach(function (audit) {
+      var seen = {};
+      audit.failedCriteria.forEach(function (name) {
+        if (!seen[name]) {
+          seen[name] = true;
+          counts[name] = (counts[name] || 0) + 1;
+        }
+      });
+    });
+
+    var names = Object.keys(counts);
+    if (!names.length) { return { primary: '', secondary: '' }; }
+
+    var weightByName = {};
+    (appState.scorecardCriteria || []).forEach(function (criterion) {
+      weightByName[criterion.name] = criterion.weight;
+    });
+
+    var ranked = names.map(function (name) {
+      return { name: name, count: counts[name], weight: weightByName[name] || 0 };
+    }).sort(function (a, b) {
+      if (b.count !== a.count) { return b.count - a.count; }
+      if (b.weight !== a.weight) { return b.weight - a.weight; }
+      return a.name.localeCompare(b.name);
+    });
+
+    return {
+      primary: ranked[0] ? ranked[0].name : '',
+      secondary: ranked[1] ? ranked[1].name : ''
+    };
+  }
+
+  function validateAuditCardsForSave(audits) {
+    for (var i = 0; i < audits.length; i += 1) {
+      var audit = audits[i];
+      var isRequiredSlot = audit.index <= AUDIT_REQUIRED_COUNT;
+
+      if (!audit.attempted) {
+        if (isRequiredSlot) {
+          return 'Audit ' + audit.index + ' is required. Fill in at least Interaction ID, Audit Date, and Score.';
+        }
+        continue; // optional and completely blank - ignore
+      }
+
+      if (!audit.interactionId || !audit.auditDate || !audit.hasScore) {
+        return 'Audit ' + audit.index + ' is incomplete. Fill in Interaction ID, Audit Date, and Score' +
+          (isRequiredSlot ? '.' : ', or clear all its fields to skip it.');
+      }
+    }
+    return '';
   }
 
   function handleGenerateReview() {
-    var numbers = getAllAuditNumbers();
-    var stream = document.getElementById('reviewQaStream').value || 'the selected stream';
-    var rootCause = document.getElementById('reviewRootCause').value;
-
-    if (!numbers.length) {
-      showStatus('Add at least one audit score before generating a review.', 'error');
+    var audits = readAllAuditCards();
+    var validationError = validateAuditCardsForSave(audits);
+    if (validationError) {
+      showStatus(validationError, 'error');
       return;
     }
 
-    var sum = numbers.reduce(function (a, b) { return a + b; }, 0);
-    var avg = (sum / numbers.length).toFixed(2);
-    var highest = Math.max.apply(null, numbers);
-    var lowest = Math.min.apply(null, numbers);
+    var completedAudits = audits.filter(function (audit) { return audit.hasScore; });
+    if (!completedAudits.length) {
+      showStatus('Enter at least ' + AUDIT_REQUIRED_COUNT + ' completed audits before generating a review.', 'error');
+      return;
+    }
 
-    var summary = 'This week\u2019s ' + stream + ' audits (' + numbers.length + ' total) averaged ' + avg +
+    var stream = document.getElementById('reviewQaStream').value || 'the selected stream';
+    var scores = completedAudits.map(function (audit) { return audit.score; });
+    var avg = (scores.reduce(function (a, b) { return a + b; }, 0) / scores.length).toFixed(2);
+    var highest = Math.max.apply(null, scores);
+    var lowest = Math.min.apply(null, scores);
+    var rootCauses = computeTopFailedCriteriaClientSide(completedAudits);
+
+    var summary = 'This week\u2019s ' + stream + ' audits (' + scores.length + ' total) averaged ' + avg +
       ', ranging from ' + lowest + ' to ' + highest + '.' +
-      (rootCause ? ' The primary root cause identified was: ' + rootCause + '.' : '') +
+      (rootCauses.primary ? ' The primary failed criterion was ' + rootCauses.primary + '.' : '') +
+      (rootCauses.secondary ? ' The secondary failed criterion was ' + rootCauses.secondary + '.' : '') +
       ' Continue monitoring trends week over week and follow up on any recurring issues during the next coaching session.';
 
     document.getElementById('reviewSummary').value = summary;
@@ -1214,9 +1374,7 @@
     var weekEnding = document.getElementById('reviewWeekEnding').value;
     var qaStream = document.getElementById('reviewQaStream').value;
     var agentId = document.getElementById('reviewAgent').value;
-    var rootCause = document.getElementById('reviewRootCause').value;
     var summary = document.getElementById('reviewSummary').value;
-    var numbers = getAllAuditNumbers();
 
     if (!agentId) {
       showStatus('Select a department and agent before saving.', 'error');
@@ -1230,28 +1388,39 @@
       showStatus('QA Stream is required.', 'error');
       return;
     }
-    if (!numbers.length) {
-      showStatus('Add at least one audit score in one of the audit boxes.', 'error');
+
+    var audits = readAllAuditCards();
+    var validationError = validateAuditCardsForSave(audits);
+    if (validationError) {
+      showStatus(validationError, 'error');
       return;
     }
 
-    var sum = numbers.reduce(function (a, b) { return a + b; }, 0);
-    var averageScore = (sum / numbers.length).toFixed(2);
+    var completedAudits = audits.filter(function (audit) { return audit.hasScore; });
+    if (completedAudits.length < AUDIT_REQUIRED_COUNT) {
+      showStatus('At least ' + AUDIT_REQUIRED_COUNT + ' completed audits are required.', 'error');
+      return;
+    }
 
-    var schema = appState.initialData && appState.initialData.forms ? appState.initialData.forms.performance : null;
-    var values = {};
-    values[findHeaderName(schema, /^weekending/, 'Week Ending')] = weekEnding;
-    values[findHeaderName(schema, /^qastream/, 'QA Stream')] = qaStream;
-    values[findHeaderName(schema, /^averagescore/, 'Average Score')] = averageScore;
-    values[findHeaderName(schema, /^numberofaudits/, 'Number of Audits')] = String(numbers.length);
-    values[findHeaderName(schema, /^primaryrootcause/, 'Primary Root Cause')] = rootCause;
-    values[findHeaderName(schema, /^qasummary/, 'QA Summary')] = summary;
-
-    var payload = { agentId: agentId, values: values };
+    var payload = {
+      agentId: agentId,
+      weekEnding: weekEnding,
+      qaStream: qaStream,
+      summary: summary,
+      audits: completedAudits.map(function (audit) {
+        return {
+          interactionId: audit.interactionId,
+          auditDate: audit.auditDate,
+          score: audit.score,
+          failedCriteria: audit.failedCriteria,
+          comments: audit.comments
+        };
+      })
+    };
 
     document.getElementById('saveReviewButton').disabled = true;
     showStatus('Saving weekly review...', 'info');
-    callServer('savePerformance', payload, function (result) {
+    callServer('saveWeeklyReview', payload, function (result) {
       showStatus(result.message || 'Weekly review saved.', 'success');
       resetWeeklyReviewForm();
       invalidateCachesForAgent(agentId);
@@ -1260,26 +1429,15 @@
     });
   }
 
-  function findHeaderName(schema, normalizedPattern, fallback) {
-    if (schema && schema.headers) {
-      var match = schema.headers.find(function (header) {
-        return normalizedPattern.test(normalizeForMatch(header));
-      });
-      if (match) { return match; }
-    }
-    return fallback;
-  }
-
   function normalizeForMatch(value) {
     return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   }
 
   function resetWeeklyReviewForm() {
-    document.getElementById('auditBatch1').value = '';
-    document.getElementById('auditBatch2').value = '';
-    document.getElementById('auditBatch3').value = '';
-    document.getElementById('reviewRootCause').value = '';
+    renderAuditCards();
     document.getElementById('reviewSummary').value = '';
+    document.getElementById('primaryRootCauseDisplay').value = '\u2014';
+    document.getElementById('secondaryRootCauseDisplay').value = '\u2014';
     document.getElementById('saveReviewButton').disabled = false;
     updateLiveCalculation();
   }
