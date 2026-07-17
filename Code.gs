@@ -70,6 +70,18 @@ function getAllDisputeRecords() {
   });
 }
 
+function getScorecardCriteria() {
+  return runSafely(function () {
+    return Tracker.getScorecardCriteria();
+  });
+}
+
+function saveWeeklyReview(payload) {
+  return runSafely(function () {
+    return Tracker.saveWeeklyReview(payload);
+  });
+}
+
 function runSafely(callback) {
   try {
     var result = callback();
