@@ -734,16 +734,25 @@ var Tracker = (function () {
     }, 0);
   }
 
-  // Frequency count of Primary Root Cause across a set of performance rows,
-  // returned as the top N { rootCause, count } entries, most frequent first.
+  // Frequency count of root causes across a set of performance rows. Each
+  // row can contribute BOTH its Primary Root Cause and its Secondary Root
+  // Cause (if present) - a row with two distinct root causes increments two
+  // counters, not one. Duplicate/blank values within the same row are only
+  // counted once. Returns the top N { rootCause, count } entries, most
+  // frequent first.
   function computeTopRootCauses(performanceRows, limit) {
     var counts = {};
     performanceRows.forEach(function (row) {
-      var rootCause = toSafeString(getFieldValue(row, [FIELD_NAMES.primaryRootCause]));
-      if (!rootCause) {
-        return;
-      }
-      counts[rootCause] = (counts[rootCause] || 0) + 1;
+      var rootCausesInRow = uniqueStrings([
+        toSafeString(getFieldValue(row, [FIELD_NAMES.primaryRootCause])),
+        toSafeString(getFieldValue(row, [FIELD_NAMES.secondaryRootCause]))
+      ].filter(function (value) {
+        return value;
+      }));
+
+      rootCausesInRow.forEach(function (rootCause) {
+        counts[rootCause] = (counts[rootCause] || 0) + 1;
+      });
     });
 
     return Object.keys(counts)
