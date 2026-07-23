@@ -52,6 +52,12 @@ function getDepartmentDashboard(departmentId) {
   });
 }
 
+function getRootCauseDrilldown(departmentId, rootCause) {
+  return runSafely(function () {
+    return Tracker.getRootCauseDrilldown(departmentId, rootCause);
+  });
+}
+
 function getAllCoachingRecords() {
   return runSafely(function () {
     return Tracker.getAllCoachingRecords();
