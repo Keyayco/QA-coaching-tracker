@@ -396,6 +396,12 @@
   }
   .modal-agent-context strong { color: var(--text); }
 
+  .root-cause-row.clickable { cursor: pointer; border-radius: var(--radius-sm); padding-left: 8px; padding-right: 8px; margin: 0 -8px; }
+  .root-cause-row.clickable:hover { background: var(--surface-alt); }
+  .drilldown-table-shell { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); max-height: 60vh; }
+  .drilldown-table-shell table { min-width: 720px; }
+  .drilldown-summary { font-size: 13px; color: var(--text-muted); margin-bottom: var(--space-4); }
+
   /* ---------- Report panel ---------- */
 
   .report-card { padding: var(--space-5); }
@@ -658,6 +664,17 @@
   </div>
 </div>
 
+<!-- Root cause drill-down modal (read-only investigation view) -->
+<div id="drilldownModalBackdrop" class="modal-backdrop">
+  <div class="modal" style="width: min(920px, 100%);">
+    <div class="modal-header">
+      <h2 id="drilldownModalTitle">Root Cause Drill-down</h2>
+      <button class="btn btn-secondary btn-sm" id="closeDrilldownModalButton" type="button">Close</button>
+    </div>
+    <div id="drilldownModalBody"></div>
+  </div>
+</div>
+
 <script>
   // ===========================================================================
   // Application state
@@ -703,6 +720,11 @@
     document.getElementById('recordForm').addEventListener('submit', handleRecordSave);
     document.getElementById('modalBackdrop').addEventListener('click', function (event) {
       if (event.target.id === 'modalBackdrop') { closeModal(); }
+    });
+
+    document.getElementById('closeDrilldownModalButton').addEventListener('click', closeDrilldownModal);
+    document.getElementById('drilldownModalBackdrop').addEventListener('click', function (event) {
+      if (event.target.id === 'drilldownModalBackdrop') { closeDrilldownModal(); }
     });
 
     document.getElementById('addCoachingFromListButton').addEventListener('click', function () {
@@ -827,6 +849,9 @@
     }
     showStatus('Loading department dashboard...', 'info');
     callServer('getDepartmentDashboard', departmentId, function (result) {
+      // ---- TEMP DEBUG LOGGING (remove after diagnosis) ----
+      console.log('[DEBUG] frontend received result.topRootCauses:', JSON.stringify(result.topRootCauses));
+      // ---- END TEMP DEBUG LOGGING ----
       appState.departmentCache[departmentId] = result;
       renderDashboard();
       showStatus('Department dashboard loaded.', 'success');
@@ -983,7 +1008,7 @@
       ? rootCauses.map(function (item) {
           var widthPct = Math.round((item.count / maxCount) * 100);
           return (
-            '<div class="root-cause-row">' +
+            '<div class="root-cause-row clickable" data-drilldown-root-cause="' + escapeAttribute(item.rootCause) + '">' +
               '<span style="width:180px;">' + escapeHtml(item.rootCause) + '</span>' +
               '<div class="root-cause-bar"><div class="root-cause-bar-fill" style="width:' + widthPct + '%;"></div></div>' +
               '<span class="root-cause-count">' + item.count + '</span>' +
@@ -1027,6 +1052,66 @@
         openAgent(card.getAttribute('data-open-agent'));
       });
     });
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-drilldown-root-cause]')).forEach(function (row) {
+      row.addEventListener('click', function () {
+        openRootCauseDrilldown(appState.dashboardDeptId, row.getAttribute('data-drilldown-root-cause'));
+      });
+    });
+  }
+
+  // ===========================================================================
+  // Root cause drill-down: Department -> Performance Log -> Performance ID
+  // -> Weekly Review Detail -> Interaction. Always fetched live (not cached)
+  // so it reflects the exact current sheet contents behind the count.
+  // ===========================================================================
+  function openRootCauseDrilldown(departmentId, rootCause) {
+    if (!departmentId || !rootCause) { return; }
+
+    document.getElementById('drilldownModalTitle').textContent = rootCause;
+    document.getElementById('drilldownModalBody').innerHTML = '<div class="empty-state">Loading interactions...</div>';
+    document.getElementById('drilldownModalBackdrop').classList.add('open');
+
+    callServer('getRootCauseDrilldown', [departmentId, rootCause], function (result) {
+      renderRootCauseDrilldown(result);
+    }, function () {
+      document.getElementById('drilldownModalBody').innerHTML = '<div class="empty-state">Unable to load this drill-down.</div>';
+    });
+  }
+
+  function renderRootCauseDrilldown(result) {
+    var records = result.records || [];
+    document.getElementById('drilldownModalTitle').textContent = result.rootCause + ' (' + records.length + ')';
+
+    if (!records.length) {
+      document.getElementById('drilldownModalBody').innerHTML =
+        '<div class="empty-state">No individual audits found for this root cause.</div>';
+      return;
+    }
+
+    var rows = records.map(function (record) {
+      return (
+        '<tr>' +
+          '<td>' + escapeHtml(record.agentName) + '</td>' +
+          '<td>' + escapeHtml(record.weekEnding) + '</td>' +
+          '<td>' + escapeHtml(record.interactionId) + '</td>' +
+          '<td>' + escapeHtml(record.auditDate) + '</td>' +
+          '<td>' + escapeHtml(toDisplayString(record.score)) + '</td>' +
+          '<td>' + escapeHtml((record.failedCriteria || []).join(', ')) + '</td>' +
+          '<td>' + escapeHtml(record.comments) + '</td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    document.getElementById('drilldownModalBody').innerHTML =
+      '<div class="drilldown-summary">' + records.length + ' interaction(s) cited this root cause.</div>' +
+      '<div class="drilldown-table-shell"><table><thead><tr>' +
+        '<th>Agent</th><th>Week Ending</th><th>Interaction ID</th><th>Audit Date</th><th>Score</th><th>Failed Criteria</th><th>Comments</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+
+  function closeDrilldownModal() {
+    document.getElementById('drilldownModalBackdrop').classList.remove('open');
   }
 
   function renderAgentView(agentResult) {
@@ -1859,6 +1944,8 @@
 
     if (typeof payload === 'undefined') {
       runner[methodName]();
+    } else if (Array.isArray(payload)) {
+      runner[methodName].apply(runner, payload);
     } else {
       runner[methodName](payload);
     }
