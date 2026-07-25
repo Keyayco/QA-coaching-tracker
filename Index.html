@@ -849,9 +849,6 @@
     }
     showStatus('Loading department dashboard...', 'info');
     callServer('getDepartmentDashboard', departmentId, function (result) {
-      // ---- TEMP DEBUG LOGGING (remove after diagnosis) ----
-      console.log('[DEBUG] frontend received result.topRootCauses:', JSON.stringify(result.topRootCauses));
-      // ---- END TEMP DEBUG LOGGING ----
       appState.departmentCache[departmentId] = result;
       renderDashboard();
       showStatus('Department dashboard loaded.', 'success');
@@ -1136,7 +1133,7 @@
           '<div class="stream-row"><span>Week Ending</span><strong>' + escapeHtml(stream.weekEnding || '') + '</strong></div>' +
           '<div class="stream-row"><span>Avg Score</span><strong>' + formatScore(stream.averageScore) + '</strong></div>' +
           '<div class="stream-row"><span>Audits</span><strong>' + escapeHtml(toDisplayString(stream.numberOfAudits)) + '</strong></div>' +
-          '<div class="stream-row"><span>Root Cause</span><strong>' + escapeHtml(stream.primaryRootCause || 'N/A') + '</strong></div>' +
+          '<div class="stream-row"><span>Root Cause</span><strong>' + escapeHtml(stream.topFailedCriterion || 'N/A') + '</strong></div>' +
         '</div>'
       );
     }).join('');
