@@ -50,7 +50,6 @@ var Tracker = (function () {
   var RESOLVED_DISPUTE_STATUSES = ['resolved', 'closed', 'completed'];
 
   var TOP_LIST_SIZE = 3;
-  var TOP_ROOT_CAUSE_SIZE = 5;
 
   // Auto-generated ID columns, keyed by sheet.
   var ID_GENERATION_CONFIG = {};
@@ -73,6 +72,23 @@ var Tracker = (function () {
     header: FIELD_NAMES.detailId,
     prefix: 'WRD-',
     padLength: 6
+  };
+
+  // Weekly Review Detail header names have drifted from FIELD_NAMES in the
+  // live sheet (e.g. "Weekly Review ID" instead of "Performance ID"). Rather
+  // than requiring a sheet rename, each logical field accepts multiple known
+  // header spellings here - the same candidate-list pattern getFieldValue()
+  // already uses for reads, extended to the write path in saveWeeklyReview().
+  var WEEKLY_REVIEW_DETAIL_HEADER_ALIASES = {
+    detailId: [FIELD_NAMES.detailId, 'Review Detail ID'],
+    performanceId: [FIELD_NAMES.performanceId, 'Weekly Review ID'],
+    agentId: [FIELD_NAMES.agentId],
+    auditNumber: ['Audit Number', 'Audit #'],
+    interactionId: [FIELD_NAMES.interactionId],
+    auditDate: [FIELD_NAMES.auditDate],
+    score: [FIELD_NAMES.score],
+    failedCriteria: [FIELD_NAMES.failedCriteria, 'Failed Criteria ID'],
+    comments: [FIELD_NAMES.comments, 'Notes']
   };
 
   // ---------------------------------------------------------------------
@@ -160,6 +176,7 @@ var Tracker = (function () {
     var coachingData = readSheet(SHEETS.coachingLog);
     var performanceData = readSheet(SHEETS.performanceLog);
     var disputeData = readSheet(SHEETS.disputeLog);
+    var detailData = readSheet(SHEETS.weeklyReviewDetail);
 
     var agentRow = findRowByField(agentData.rows, FIELD_NAMES.agentId, requestedAgentId);
     if (!agentRow) {
@@ -176,7 +193,14 @@ var Tracker = (function () {
     var performanceRows = filterRowsByAgentId(performanceData.rows, requestedAgentId);
     var disputeRows = filterRowsByAgentId(disputeData.rows, requestedAgentId);
 
-    var performanceByStream = computePerformanceByStream(performanceRows);
+    // Scope Weekly Review Detail to this agent via the Performance ID FK
+    // (not a direct Agent ID column on Weekly Review Detail, which isn't
+    // guaranteed to exist) so per-stream failed criteria can be derived
+    // straight from Weekly Review Detail.
+    var agentPerformanceIds = buildPerformanceIdSet(performanceRows);
+    var agentDetailRows = filterDetailRowsByPerformanceIds(detailData.rows, agentPerformanceIds);
+
+    var performanceByStream = computePerformanceByStream(performanceRows, agentDetailRows);
     var overallAveragePerformance = computeOverallAverage(performanceByStream);
     var openDisputeCount = countOpenDisputes(disputeRows);
     var openActionCount = countOpenActions(coachingRows);
@@ -312,6 +336,7 @@ var Tracker = (function () {
     var performanceData = readSheet(SHEETS.performanceLog);
     var coachingData = readSheet(SHEETS.coachingLog);
     var disputeData = readSheet(SHEETS.disputeLog);
+    var detailData = readSheet(SHEETS.weeklyReviewDetail);
 
     var scoped = buildDepartmentScope(requestedDepartmentId, agentData, performanceData, coachingData, disputeData);
 
@@ -333,7 +358,14 @@ var Tracker = (function () {
       })
       .slice(0, TOP_LIST_SIZE);
 
-    var topRootCauses = computeTopRootCauses(scoped.performanceRows, TOP_ROOT_CAUSE_SIZE);
+    // Root cause analytics: Department -> Agents -> Performance IDs (via
+    // Performance Log, used ONLY as an identity/linking index here, never
+    // for its Primary/Secondary Root Cause columns) -> Weekly Review Detail
+    // rows -> Failed Criteria aggregation. This is the single aggregation
+    // path for root cause reporting; see computeFailedCriteriaAggregate().
+    var departmentPerformanceIds = buildPerformanceIdSet(scoped.performanceRows);
+    var departmentDetailRows = filterDetailRowsByPerformanceIds(detailData.rows, departmentPerformanceIds);
+    var topRootCauses = computeFailedCriteriaAggregate(departmentDetailRows);
 
     return {
       success: true,
@@ -346,6 +378,118 @@ var Tracker = (function () {
       topPerformers: topPerformers,
       needsCoaching: needsCoaching
     };
+  }
+
+  // Drill-down: Department -> Performance Log (matching Primary/Secondary
+  // Root Cause) -> Performance ID -> Weekly Review Detail (matching Failed
+  // Criteria) -> individual interaction. This is a read-time join only -
+  // nothing is duplicated or stored separately from Performance Log /
+  // Weekly Review Detail.
+  function getRootCauseDrilldown(departmentId, rootCause) {
+    var requestedDepartmentId = toSafeString(departmentId);
+    var requestedRootCause = toSafeString(rootCause);
+
+    if (!requestedDepartmentId || !requestedRootCause) {
+      return {
+        success: false,
+        message: 'A department and root cause are required.'
+      };
+    }
+
+    var agentData = readSheet(SHEETS.agents);
+    var performanceData = readSheet(SHEETS.performanceLog);
+    var detailData = readSheet(SHEETS.weeklyReviewDetail);
+
+    var agentNameById = {};
+    var departmentAgentIds = {};
+    agentData.rows.forEach(function (agentRow) {
+      var agentId = toSafeString(getFieldValue(agentRow, [FIELD_NAMES.agentId]));
+      agentNameById[agentId] = toSafeString(getFieldValue(agentRow, [FIELD_NAMES.name]));
+      if (toSafeString(getFieldValue(agentRow, [FIELD_NAMES.departmentId])) === requestedDepartmentId) {
+        departmentAgentIds[agentId] = true;
+      }
+    });
+
+    // Step 1: Department -> Agents -> every Performance Log row for those
+    // agents. Performance Log is used ONLY as a Performance ID -> Agent ID /
+    // Week Ending index here - its Primary/Secondary Root Cause columns are
+    // never read or compared against. No pre-filtering by root cause
+    // happens at this step.
+    var performanceById = {};
+    performanceData.rows.forEach(function (row) {
+      var agentId = toSafeString(getFieldValue(row, [FIELD_NAMES.agentId]));
+      if (!departmentAgentIds[agentId]) {
+        return;
+      }
+
+      var performanceId = toSafeString(getFieldValue(row, [FIELD_NAMES.performanceId]));
+      if (performanceId) {
+        performanceById[performanceId] = row;
+      }
+    });
+
+    // Step 2: Performance ID -> Weekly Review Detail rows (the FK link) ->
+    // keep only rows whose Failed Criteria actually cites the requested
+    // root cause. This is the ONLY place root cause matching happens.
+    var records = [];
+    detailData.rows.forEach(function (detailRow) {
+      var linkedPerformanceId = toSafeString(getFieldValue(detailRow, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.performanceId));
+      var parentRow = performanceById[linkedPerformanceId];
+      if (!parentRow) {
+        return;
+      }
+
+      var failedCriteriaList = parseFailedCriteria(getFieldValue(detailRow, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.failedCriteria));
+
+      var citesThisRootCause = failedCriteriaList.some(function (criterionName) {
+        return rootCauseMatches(criterionName, requestedRootCause);
+      });
+      if (!citesThisRootCause) {
+        return;
+      }
+
+      var agentId = toSafeString(getFieldValue(parentRow, [FIELD_NAMES.agentId]));
+
+      records.push({
+        performanceId: linkedPerformanceId,
+        agentId: agentId,
+        agentName: agentNameById[agentId] || agentId,
+        weekEnding: serializeValue(getFieldValue(parentRow, [FIELD_NAMES.weekEnding])),
+        interactionId: toSafeString(getFieldValue(detailRow, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.interactionId)),
+        auditDate: serializeValue(getFieldValue(detailRow, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.auditDate)),
+        score: toNumber(getFieldValue(detailRow, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.score)),
+        comments: toSafeString(getFieldValue(detailRow, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.comments)),
+        failedCriteria: failedCriteriaList
+      });
+    });
+
+    records.sort(function (a, b) {
+      return (b.auditDate || '').localeCompare(a.auditDate || '');
+    });
+
+    return {
+      success: true,
+      rootCause: requestedRootCause,
+      departmentId: requestedDepartmentId,
+      records: records
+    };
+  }
+
+  // Case/whitespace-insensitive equality used to match a Failed Criteria
+  // entry against a requested root cause name. This is the only place
+  // "does this value represent that root cause" is decided.
+  function rootCauseMatches(valueA, valueB) {
+    return normalizeHeader(valueA) === normalizeHeader(valueB) && normalizeHeader(valueA) !== '';
+  }
+
+  // Splits a Weekly Review Detail "Failed Criteria" cell into a clean list:
+  // comma-separated, trimmed, blanks dropped. This is the single parsing
+  // path every root-cause function uses to read that column.
+  function parseFailedCriteria(rawValue) {
+    return toSafeString(rawValue)
+      .split(',')
+      .map(function (value) { return value.trim(); })
+      .filter(function (value) { return value; });
   }
 
   function getScorecardCriteria() {
@@ -424,6 +568,13 @@ var Tracker = (function () {
     var highestScore = Math.max.apply(null, scores);
     var lowestScore = Math.min.apply(null, scores);
 
+    // LEGACY WRITE ONLY: Primary/Secondary Root Cause are still computed and
+    // written to Performance Log below for backwards compatibility, but no
+    // dashboard, report, or drill-down reads them anymore - all root cause
+    // analytics come from Weekly Review Detail's Failed Criteria via
+    // computeFailedCriteriaAggregate(). Safe to remove this computation and
+    // the two writes below entirely once the Primary/Secondary Root Cause
+    // columns are retired from Performance Log.
     var rootCauses = computeTopFailedCriteria(completedAudits);
 
     var performanceData = readSheet(SHEETS.performanceLog);
@@ -472,37 +623,38 @@ var Tracker = (function () {
     performanceData.sheet.appendRow(performanceRow);
 
     var detailData = readSheet(SHEETS.weeklyReviewDetail);
-    var nextDetailNumber = computeMaxSequentialNumber(detailData.rows, [FIELD_NAMES.detailId]);
+    var nextDetailNumber = computeMaxSequentialNumber(detailData.rows, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.detailId);
 
-    completedAudits.forEach(function (audit) {
+    completedAudits.forEach(function (audit, auditIndex) {
       nextDetailNumber += 1;
       var detailId = 'WRD-' + padNumber(nextDetailNumber, 6);
 
       var detailRow = detailData.headers.map(function (header) {
-        var normalized = normalizeHeader(header);
-
-        if (normalized === normalizeHeader(FIELD_NAMES.detailId)) {
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.detailId)) {
           return detailId;
         }
-        if (normalized === normalizeHeader(FIELD_NAMES.performanceId)) {
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.performanceId)) {
           return performanceId;
         }
-        if (normalized === normalizeHeader(FIELD_NAMES.agentId)) {
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.agentId)) {
           return agentId;
         }
-        if (normalized === normalizeHeader(FIELD_NAMES.interactionId)) {
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.auditNumber)) {
+          return auditIndex + 1;
+        }
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.interactionId)) {
           return audit.interactionId;
         }
-        if (normalized === normalizeHeader(FIELD_NAMES.auditDate)) {
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.auditDate)) {
           return coerceValueForSheet(header, audit.auditDate);
         }
-        if (normalized === normalizeHeader(FIELD_NAMES.score)) {
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.score)) {
           return audit.score;
         }
-        if (normalized === normalizeHeader(FIELD_NAMES.failedCriteria)) {
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.failedCriteria)) {
           return audit.failedCriteria.join(', ');
         }
-        if (normalized === normalizeHeader(FIELD_NAMES.comments)) {
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.comments)) {
           return audit.comments;
         }
         return '';
@@ -635,6 +787,10 @@ var Tracker = (function () {
 
       performanceRows = performanceRows.concat(agentPerformanceRows);
 
+      // detailRows intentionally omitted: this scope only needs
+      // overallAverage/totalAudits from the stream summary, never the
+      // per-stream topFailedCriterion, so there's no reason to read
+      // Weekly Review Detail again for every agent here.
       var streamSummary = computePerformanceByStream(agentPerformanceRows);
       var overallAverage = computeOverallAverage(streamSummary);
       var totalAudits = sumNumberOfAudits(agentPerformanceRows);
@@ -734,35 +890,63 @@ var Tracker = (function () {
     }, 0);
   }
 
-  // Frequency count of root causes across a set of performance rows. Each
-  // row can contribute BOTH its Primary Root Cause and its Secondary Root
-  // Cause (if present) - a row with two distinct root causes increments two
-  // counters, not one. Duplicate/blank values within the same row are only
-  // counted once. Returns the top N { rootCause, count } entries, most
-  // frequent first.
-  function computeTopRootCauses(performanceRows, limit) {
+  // SINGLE SOURCE OF TRUTH for root-cause analytics. Reads Failed Criteria
+  // directly from Weekly Review Detail rows only - Performance Log's
+  // Primary/Secondary Root Cause columns are never read here or anywhere
+  // else in the reporting pipeline. Each criterion is counted once per
+  // audit (a detail row listing the same criterion twice is not double-
+  // counted), then aggregated across every row provided. Returns every
+  // criterion that occurred, sorted most frequent first - no artificial
+  // cap, since a department should show every criterion that occurred.
+  function computeFailedCriteriaAggregate(detailRows) {
     var counts = {};
-    performanceRows.forEach(function (row) {
-      var rootCausesInRow = uniqueStrings([
-        toSafeString(getFieldValue(row, [FIELD_NAMES.primaryRootCause])),
-        toSafeString(getFieldValue(row, [FIELD_NAMES.secondaryRootCause]))
-      ].filter(function (value) {
-        return value;
-      }));
+    var displayLabels = {};
 
-      rootCausesInRow.forEach(function (rootCause) {
-        counts[rootCause] = (counts[rootCause] || 0) + 1;
+    detailRows.forEach(function (row) {
+      var criteriaInRow = uniqueStrings(
+        parseFailedCriteria(getFieldValue(row, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.failedCriteria))
+      );
+
+      criteriaInRow.forEach(function (criterion) {
+        var key = normalizeHeader(criterion);
+        counts[key] = (counts[key] || 0) + 1;
+        if (!displayLabels[key]) {
+          displayLabels[key] = criterion;
+        }
       });
     });
 
     return Object.keys(counts)
-      .map(function (rootCause) {
-        return { rootCause: rootCause, count: counts[rootCause] };
+      .map(function (key) {
+        return { rootCause: displayLabels[key], count: counts[key] };
       })
       .sort(function (a, b) {
         return b.count - a.count;
-      })
-      .slice(0, limit);
+      });
+  }
+
+  // Builds a { performanceId: true } lookup set from a list of Performance
+  // Log rows - used to scope Weekly Review Detail rows to a department or
+  // agent via the Performance ID foreign key, without ever reading that
+  // row's root cause columns.
+  function buildPerformanceIdSet(performanceRows) {
+    var idSet = {};
+    performanceRows.forEach(function (row) {
+      var performanceId = toSafeString(getFieldValue(row, [FIELD_NAMES.performanceId]));
+      if (performanceId) {
+        idSet[performanceId] = true;
+      }
+    });
+    return idSet;
+  }
+
+  // Filters Weekly Review Detail rows to those linked to a Performance ID
+  // present in the given set.
+  function filterDetailRowsByPerformanceIds(detailRows, performanceIdSet) {
+    return detailRows.filter(function (detailRow) {
+      var linkedPerformanceId = toSafeString(getFieldValue(detailRow, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.performanceId));
+      return !!performanceIdSet[linkedPerformanceId];
+    });
   }
 
   // Reads an entire log sheet (no agent filter) and enriches each record
@@ -940,7 +1124,13 @@ var Tracker = (function () {
     });
   }
 
-  function computePerformanceByStream(rows) {
+  // detailRows (optional): Weekly Review Detail rows already scoped to this
+  // agent, used only to derive each stream's top failed criterion straight
+  // from Weekly Review Detail - Performance Log's Primary/Secondary Root
+  // Cause columns are never read here.
+  function computePerformanceByStream(rows, detailRows) {
+    var scopedDetailRows = detailRows || [];
+
     return QA_STREAM_OPTIONS.map(function (streamName) {
       var streamRows = rows.filter(function (row) {
         return toSafeString(getFieldValue(row, [FIELD_NAMES.qaStream])) === streamName;
@@ -965,13 +1155,19 @@ var Tracker = (function () {
         return latest;
       });
 
+      var latestPerformanceId = toSafeString(getFieldValue(latestRow, [FIELD_NAMES.performanceId]));
+      var latestReviewDetailRows = scopedDetailRows.filter(function (detailRow) {
+        return toSafeString(getFieldValue(detailRow, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.performanceId)) === latestPerformanceId;
+      });
+      var failedCriteriaSummary = computeFailedCriteriaAggregate(latestReviewDetailRows);
+
       return {
         qaStream: streamName,
         hasData: true,
         weekEnding: serializeValue(getFieldValue(latestRow, [FIELD_NAMES.weekEnding])),
         averageScore: toNumber(getFieldValue(latestRow, [FIELD_NAMES.averageScore])),
         numberOfAudits: toNumber(getFieldValue(latestRow, [FIELD_NAMES.numberOfAudits])),
-        primaryRootCause: toSafeString(getFieldValue(latestRow, [FIELD_NAMES.primaryRootCause]))
+        topFailedCriterion: failedCriteriaSummary.length ? failedCriteriaSummary[0].rootCause : ''
       };
     });
   }
@@ -1375,6 +1571,16 @@ var Tracker = (function () {
     return toSafeString(value).toLowerCase().replace(/[^a-z0-9]/g, '');
   }
 
+  // Returns true if `header` normalizes to match any of the given candidate
+  // header spellings. Used on the write path (building a row to append) so
+  // a sheet's actual header text doesn't have to exactly match FIELD_NAMES.
+  function headerMatchesAny(header, candidates) {
+    var normalizedHeader = normalizeHeader(header);
+    return candidates.some(function (candidate) {
+      return normalizeHeader(candidate) === normalizedHeader;
+    });
+  }
+
   return {
     getInitialData: getInitialData,
     getAgentsByDepartment: getAgentsByDepartment,
@@ -1384,6 +1590,7 @@ var Tracker = (function () {
     saveDispute: saveDispute,
     getDashboardOverview: getDashboardOverview,
     getDepartmentDashboard: getDepartmentDashboard,
+    getRootCauseDrilldown: getRootCauseDrilldown,
     getAllCoachingRecords: getAllCoachingRecords,
     getAllPerformanceRecords: getAllPerformanceRecords,
     getAllDisputeRecords: getAllDisputeRecords,
@@ -1391,4 +1598,3 @@ var Tracker = (function () {
     saveWeeklyReview: saveWeeklyReview
   };
 })();
- 
