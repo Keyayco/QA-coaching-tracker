@@ -244,6 +244,45 @@
   .badge.danger { background: var(--danger-bg); color: var(--danger); }
   .badge.neutral { background: var(--surface-alt); color: var(--text-muted); border: 1px solid var(--border); }
 
+  /* ---------- Agent Profile ---------- */
+
+  .profile-header { display: flex; gap: var(--space-5); padding: var(--space-5); margin-bottom: var(--space-5); align-items: flex-start; flex-wrap: wrap; }
+  .profile-avatar {
+    width: 64px; height: 64px; border-radius: 50%; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--primary), #7c72f0); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700;
+  }
+  .profile-identity { flex: 1; min-width: 220px; }
+  .profile-identity h2 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .profile-identity .profile-subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: var(--space-3); }
+  .profile-meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-2) var(--space-4); font-size: 12.5px; }
+  .profile-meta-grid .meta-item span { display: block; color: var(--text-faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
+  .profile-meta-grid .meta-item strong { color: var(--text); font-weight: 600; }
+  .tag-chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--space-3); }
+  .tag-chip { background: var(--primary-soft); color: var(--primary-dark); font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+
+  .timeline-tabs { display: flex; gap: 6px; margin-bottom: var(--space-4); }
+  .timeline-tab {
+    border: 1px solid var(--border); background: var(--surface); color: var(--text-muted);
+    border-radius: var(--radius-sm); padding: 6px 12px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  }
+  .timeline-tab.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .timeline-chart-svg { width: 100%; height: 140px; display: block; }
+  .timeline-period-table { width: 100%; border-collapse: collapse; margin-top: var(--space-4); font-size: 12.5px; }
+  .timeline-period-table th, .timeline-period-table td { padding: 8px 10px; border-bottom: 1px solid var(--border-soft); text-align: right; }
+  .timeline-period-table th:first-child, .timeline-period-table td:first-child { text-align: left; }
+  .timeline-period-table th { color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  .trend-up { color: var(--success); }
+  .trend-down { color: var(--danger); }
+
+  .strength-card, .development-card { padding: var(--space-4); }
+  .strength-card h4, .development-card h4 { font-size: 13.5px; font-weight: 700; margin-bottom: 6px; }
+  .strength-card p, .development-card p { font-size: 12px; color: var(--text-muted); margin: 0; }
+  .development-card .dev-meta { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-faint); margin-top: var(--space-2); }
+  .development-card .coaching-tip { margin-top: var(--space-2); padding: 8px 10px; background: var(--surface-alt); border-radius: var(--radius-sm); font-size: 12px; color: var(--text); }
+
+  /* ---------- Stream cards (existing) ---------- */
+
   .root-cause-row {
     display: flex; align-items: center; gap: var(--space-3);
     padding: var(--space-3) 0; border-bottom: 1px solid var(--border-soft);
@@ -684,6 +723,7 @@
     dashboardView: 'overview',  // 'overview' | 'department' | 'agent'
     dashboardDeptId: '',
     dashboardAgentId: '',
+    agentTimelinePeriod: 'weekly',
     dashboardOverviewCache: null,
     departmentCache: {},        // departmentId -> getDepartmentDashboard() result
     agentCache: {},              // agentId -> getAgentDashboard() result
@@ -1112,8 +1152,11 @@
   }
 
   function renderAgentView(agentResult) {
+    var agent = agentResult.agent || {};
     var summary = agentResult.summary || {};
     var histories = agentResult.histories || {};
+
+    var profileHeaderHtml = renderProfileHeader(agent);
 
     var kpiHtml =
       '<div class="kpi-grid">' +
@@ -1122,6 +1165,9 @@
         kpiCard('Open Actions', formatCountOrNA(summary.openActionCount)) +
         kpiCard('Open Disputes', formatCountOrNA(summary.openDisputeCount)) +
       '</div>';
+
+    var timelineSectionHtml = renderPerformanceTimelineSection(summary.performanceTimeline || {});
+    var criteriaSectionHtml = renderCriteriaAnalysisSection(summary.criteriaAnalysis || {});
 
     var streamCards = (summary.performanceByStream || []).map(function (stream) {
       if (!stream.hasData) {
@@ -1139,7 +1185,7 @@
     }).join('');
 
     var timelineItems = buildTimelineItems(histories);
-    var timelineHtml = timelineItems.length
+    var activityTimelineHtml = timelineItems.length
       ? '<div class="timeline">' + timelineItems.map(renderTimelineItem).join('') + '</div>'
       : '<div class="empty-state">No coaching or performance history yet.</div>';
 
@@ -1150,10 +1196,182 @@
         '<button class="btn btn-primary btn-sm" data-quick-add="dispute">+ Add Dispute</button>' +
       '</div>';
 
-    return actionsHtml + kpiHtml +
+    return profileHeaderHtml + actionsHtml + kpiHtml +
+      '<div class="section"><div class="section-title">Performance Timeline</div><div class="card review-panel">' + timelineSectionHtml + '</div></div>' +
+      criteriaSectionHtml +
       '<div class="section"><div class="section-title">Performance by QA Stream</div><div class="stream-grid">' + streamCards + '</div></div>' +
-      '<div class="section"><div class="section-title">Timeline</div><div class="card" style="padding: var(--space-5);">' + timelineHtml + '</div></div>';
+      '<div class="section"><div class="section-title">Activity Timeline</div><div class="card" style="padding: var(--space-5);">' + activityTimelineHtml + '</div></div>';
   }
+
+  function renderProfileHeader(agent) {
+    var profile = agent.profile || {};
+    var initials = (agent.name || agent.agentId || '?')
+      .split(/\s+/).filter(Boolean).slice(0, 2).map(function (w) { return w.charAt(0).toUpperCase(); }).join('');
+
+    var metaItems = [
+      { label: 'Agent ID', value: agent.agentId },
+      { label: 'Employee #', value: profile.employeeNumber },
+      { label: 'Department', value: agent.departmentName },
+      { label: 'Team Leader', value: profile.teamLeader },
+      { label: 'Supervisor', value: agent.supervisor },
+      { label: 'Role', value: profile.role },
+      { label: 'Status', value: agent.status },
+      { label: 'Tenure', value: profile.tenureLabel },
+      { label: 'Start Date', value: agent.startDate },
+      { label: 'Email', value: profile.email },
+      { label: 'Phone', value: profile.phone },
+      { label: 'Location', value: profile.location }
+    ].filter(function (item) { return item.value; });
+
+    var metaHtml = metaItems.map(function (item) {
+      return '<div class="meta-item"><span>' + escapeHtml(item.label) + '</span><strong>' + escapeHtml(item.value) + '</strong></div>';
+    }).join('');
+
+    var tagRows = [
+      { label: 'Languages', values: profile.languages },
+      { label: 'Skills', values: profile.skills },
+      { label: 'Certifications', values: profile.certifications }
+    ].filter(function (row) { return row.values && row.values.length; });
+
+    var tagsHtml = tagRows.map(function (row) {
+      return '<div style="margin-top: var(--space-2);"><span style="font-size:11px; color: var(--text-faint); text-transform:uppercase; letter-spacing:0.04em;">' +
+        escapeHtml(row.label) + '</span><div class="tag-chip-row">' +
+        row.values.map(function (v) { return '<span class="tag-chip">' + escapeHtml(v) + '</span>'; }).join('') +
+        '</div></div>';
+    }).join('');
+
+    return (
+      '<div class="card profile-header">' +
+        '<div class="profile-avatar">' + escapeHtml(initials || '?') + '</div>' +
+        '<div class="profile-identity">' +
+          '<h2>' + escapeHtml(agent.name || agent.agentId) + '</h2>' +
+          '<div class="profile-subtitle">' + escapeHtml(profile.role || agent.departmentName || '') + '</div>' +
+          '<div class="profile-meta-grid">' + metaHtml + '</div>' +
+          tagsHtml +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  var TIMELINE_PERIOD_LABELS = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', yearly: 'Yearly' };
+
+  function renderPerformanceTimelineSection(performanceTimeline) {
+    var activePeriod = appState.agentTimelinePeriod || 'weekly';
+    var periods = performanceTimeline[activePeriod] || [];
+
+    var tabsHtml = '<div class="timeline-tabs">' +
+      Object.keys(TIMELINE_PERIOD_LABELS).map(function (key) {
+        return '<button class="timeline-tab' + (key === activePeriod ? ' active' : '') + '" data-timeline-period="' + key + '">' +
+          TIMELINE_PERIOD_LABELS[key] + '</button>';
+      }).join('') +
+      '</div>';
+
+    if (!periods.length) {
+      return tabsHtml + '<div class="empty-state">No ' + TIMELINE_PERIOD_LABELS[activePeriod].toLowerCase() + ' performance history yet.</div>';
+    }
+
+    var chartHtml = buildTimelineChartSvg(periods);
+
+    var tableRows = periods.map(function (period) {
+      var trendClass = period.improvementPct === null || period.improvementPct === undefined ? '' :
+        (period.improvementPct > 0 ? 'trend-up' : (period.improvementPct < 0 ? 'trend-down' : ''));
+      var trendLabel = period.improvementPct === null || period.improvementPct === undefined ? '\u2014' :
+        (period.improvementPct > 0 ? '+' : '') + period.improvementPct + '%';
+      return (
+        '<tr>' +
+          '<td>' + escapeHtml(period.periodLabel) + '</td>' +
+          '<td>' + formatScore(period.averageScore) + '</td>' +
+          '<td>' + escapeHtml(toDisplayString(period.auditCount)) + '</td>' +
+          '<td>' + formatScore(period.movingAverage) + '</td>' +
+          '<td class="' + trendClass + '">' + trendLabel + '</td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    return tabsHtml + chartHtml +
+      '<table class="timeline-period-table"><thead><tr>' +
+        '<th>Period</th><th>Avg Score</th><th>Audits</th><th>Moving Avg</th><th>Change</th>' +
+      '</tr></thead><tbody>' + tableRows + '</tbody></table>';
+  }
+
+  function buildTimelineChartSvg(periods) {
+    if (periods.length < 2) {
+      return '<div class="empty-state">Not enough periods yet for a trend line.</div>';
+    }
+
+    var scores = periods.map(function (p) { return p.averageScore; });
+    var minScore = Math.min.apply(null, scores);
+    var maxScore = Math.max.apply(null, scores);
+    var range = (maxScore - minScore) || 1;
+    var width = 600;
+    var height = 140;
+    var paddingX = 12;
+    var paddingY = 16;
+
+    function xFor(index) { return paddingX + (index / (periods.length - 1)) * (width - paddingX * 2); }
+    function yFor(score) { return height - paddingY - ((score - minScore) / range) * (height - paddingY * 2); }
+
+    var scorePoints = periods.map(function (p, i) { return xFor(i) + ',' + yFor(p.averageScore); }).join(' ');
+    var movingPoints = periods.map(function (p, i) { return xFor(i) + ',' + yFor(p.movingAverage); }).join(' ');
+    var dots = periods.map(function (p, i) {
+      return '<circle cx="' + xFor(i) + '" cy="' + yFor(p.averageScore) + '" r="2.5" fill="var(--primary)"></circle>';
+    }).join('');
+
+    return (
+      '<svg class="timeline-chart-svg" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
+        '<polyline points="' + movingPoints + '" fill="none" stroke="var(--text-faint)" stroke-width="1.5" stroke-dasharray="4 3"></polyline>' +
+        '<polyline points="' + scorePoints + '" fill="none" stroke="var(--primary)" stroke-width="2"></polyline>' +
+        dots +
+      '</svg>'
+    );
+  }
+
+  function setAgentTimelinePeriod(period) {
+    appState.agentTimelinePeriod = period;
+    renderDashboard();
+  }
+
+  function renderCriteriaAnalysisSection(criteriaAnalysis) {
+    var strengths = criteriaAnalysis.strengths || [];
+    var developmentAreas = criteriaAnalysis.developmentAreas || [];
+    var totalAuditsReviewed = criteriaAnalysis.totalAuditsReviewed || 0;
+
+    var strengthsHtml;
+    if (totalAuditsReviewed < MIN_AUDITS_FOR_STRENGTH_DISPLAY) {
+      strengthsHtml = '<div class="empty-state">Not enough audit history yet to identify strengths (need at least ' +
+        MIN_AUDITS_FOR_STRENGTH_DISPLAY + ' reviewed audits).</div>';
+    } else if (!strengths.length) {
+      strengthsHtml = '<div class="empty-state">No criteria are failure-free yet across ' + totalAuditsReviewed + ' audits reviewed.</div>';
+    } else {
+      strengthsHtml = '<div class="list-grid">' + strengths.map(function (s) {
+        return '<div class="card strength-card"><h4>' + escapeHtml(s.criterion) + '</h4><p>' + escapeHtml(s.note) + '</p></div>';
+      }).join('') + '</div>';
+    }
+
+    var developmentHtml;
+    if (!developmentAreas.length) {
+      developmentHtml = '<div class="empty-state">No recurring failed criteria yet.</div>';
+    } else {
+      developmentHtml = '<div class="list-grid">' + developmentAreas.map(function (d) {
+        var trendClass = d.trend === 'Increasing' ? 'trend-down' : (d.trend === 'Decreasing' ? 'trend-up' : '');
+        return (
+          '<div class="card development-card">' +
+            '<h4>' + escapeHtml(d.criterion) + '</h4>' +
+            '<p>Cited ' + d.count + ' time(s)' + (d.lastOccurrence ? ' \u2014 last on ' + escapeHtml(d.lastOccurrence) : '') + '</p>' +
+            '<div class="dev-meta"><span class="' + trendClass + '">Trend: ' + escapeHtml(d.trend) + '</span></div>' +
+            (d.coachingTip ? '<div class="coaching-tip">' + escapeHtml(d.coachingTip) + '</div>' : '') +
+          '</div>'
+        );
+      }).join('') + '</div>';
+    }
+
+    return (
+      '<div class="section"><div class="section-title">Strengths</div>' + strengthsHtml + '</div>' +
+      '<div class="section"><div class="section-title">Development Areas</div>' + developmentHtml + '</div>'
+    );
+  }
+
+  var MIN_AUDITS_FOR_STRENGTH_DISPLAY = 3;
 
   function buildTimelineItems(histories) {
     var items = [];
@@ -1163,7 +1381,7 @@
         type: 'performance',
         date: record['Week Ending'] || '',
         title: (record['QA Stream'] || 'Performance') + ' \u2014 ' + formatScore(record['Average Score']),
-        desc: record['Primary Root Cause'] || ''
+        desc: record['Number of Audits'] ? (record['Number of Audits'] + ' audit(s) reviewed') : ''
       });
     });
 
@@ -1209,6 +1427,12 @@
         var agentResult = appState.agentCache[appState.dashboardAgentId];
         var agent = agentResult ? agentResult.agent : null;
         openModal(button.getAttribute('data-quick-add'), agent ? { agentId: agent.agentId, name: agent.name } : null);
+      });
+    });
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-timeline-period]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        setAgentTimelinePeriod(button.getAttribute('data-timeline-period'));
       });
     });
   }
