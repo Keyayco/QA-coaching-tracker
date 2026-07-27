@@ -39,8 +39,21 @@ var Tracker = (function () {
     failedCriteria: 'Failed Criteria',
     comments: 'Comments',
     criterionName: 'Criterion Name',
-    criterionWeight: 'Weight'
+    criterionWeight: 'Weight',
+    coachingTip: 'Coaching Tip',
+    employeeNumber: 'Employee Number',
+    teamLeader: 'Team Leader',
+    role: 'Role',
+    email: 'Email',
+    phone: 'Phone',
+    location: 'Location',
+    languages: 'Languages',
+    skills: 'Skills',
+    certifications: 'Certifications'
   };
+
+  var MIN_AUDITS_FOR_STRENGTH = 3;
+  var TIMELINE_LIMITS = { weekly: 26, monthly: 12, quarterly: 8, yearly: 5 };
 
   var MIN_REQUIRED_AUDITS = 3;
   var MAX_AUDITS = 5;
@@ -205,6 +218,10 @@ var Tracker = (function () {
     var openDisputeCount = countOpenDisputes(disputeRows);
     var openActionCount = countOpenActions(coachingRows);
 
+    var scorecardCriteria = getScorecardCriteria().criteria;
+    var performanceTimeline = buildPerformanceTimeline(performanceRows);
+    var criteriaAnalysis = computeAgentCriteriaAnalysis(agentDetailRows, scorecardCriteria);
+
     return {
       success: true,
       agent: {
@@ -215,12 +232,15 @@ var Tracker = (function () {
         supervisor: toSafeString(getFieldValue(agentRow, [FIELD_NAMES.supervisor])),
         startDate: serializeValue(getFieldValue(agentRow, [FIELD_NAMES.startDate])),
         status: toSafeString(getFieldValue(agentRow, [FIELD_NAMES.status])),
+        profile: buildAgentProfileFields(agentRow),
         details: serializeRecord(agentData.headers, agentRow)
       },
       summary: {
         coachingCount: coachingRows.length,
         overallAveragePerformance: overallAveragePerformance,
         performanceByStream: performanceByStream,
+        performanceTimeline: performanceTimeline,
+        criteriaAnalysis: criteriaAnalysis,
         mostRecentCoaching: getMostRecentDateLabel(coachingRows),
         mostRecentPerformance: getMostRecentDateLabel(performanceRows),
         mostRecentDispute: getMostRecentDateLabel(disputeRows),
@@ -498,7 +518,8 @@ var Tracker = (function () {
       .map(function (row) {
         return {
           name: toSafeString(getFieldValue(row, [FIELD_NAMES.criterionName])),
-          weight: toNumber(getFieldValue(row, [FIELD_NAMES.criterionWeight])) || 0
+          weight: toNumber(getFieldValue(row, [FIELD_NAMES.criterionWeight])) || 0,
+          coachingTip: toSafeString(getFieldValue(row, [FIELD_NAMES.coachingTip]))
         };
       })
       .filter(function (criterion) {
@@ -1170,6 +1191,266 @@ var Tracker = (function () {
         topFailedCriterion: failedCriteriaSummary.length ? failedCriteriaSummary[0].rootCause : ''
       };
     });
+  }
+
+  // Builds the extended Agent Profile fields. Every field is header-driven
+  // and optional - if a column doesn't exist yet in the Agents sheet,
+  // getFieldValue already returns '' gracefully, so this never breaks for
+  // sheets that haven't added the new columns.
+  function buildAgentProfileFields(agentRow) {
+    return {
+      employeeNumber: toSafeString(getFieldValue(agentRow, [FIELD_NAMES.employeeNumber])),
+      teamLeader: toSafeString(getFieldValue(agentRow, [FIELD_NAMES.teamLeader])),
+      role: toSafeString(getFieldValue(agentRow, [FIELD_NAMES.role])),
+      email: toSafeString(getFieldValue(agentRow, [FIELD_NAMES.email])),
+      phone: toSafeString(getFieldValue(agentRow, [FIELD_NAMES.phone])),
+      location: toSafeString(getFieldValue(agentRow, [FIELD_NAMES.location])),
+      languages: splitTagList(getFieldValue(agentRow, [FIELD_NAMES.languages])),
+      skills: splitTagList(getFieldValue(agentRow, [FIELD_NAMES.skills])),
+      certifications: splitTagList(getFieldValue(agentRow, [FIELD_NAMES.certifications])),
+      tenureLabel: computeTenureLabel(getFieldValue(agentRow, [FIELD_NAMES.startDate]))
+    };
+  }
+
+  // Splits a comma-separated cell (e.g. "Spanish, French") into a clean
+  // array. Used for Languages/Skills/Certifications, which are free-text
+  // list cells rather than single values.
+  function splitTagList(rawValue) {
+    return toSafeString(rawValue)
+      .split(',')
+      .map(function (value) { return value.trim(); })
+      .filter(function (value) { return value; });
+  }
+
+  function computeTenureLabel(startDateValue) {
+    var startDate = parseDate(startDateValue);
+    if (!startDate) {
+      return '';
+    }
+
+    var today = new Date();
+    var totalMonths = (today.getFullYear() - startDate.getFullYear()) * 12 + (today.getMonth() - startDate.getMonth());
+    if (today.getDate() < startDate.getDate()) {
+      totalMonths -= 1;
+    }
+    if (totalMonths < 0) {
+      totalMonths = 0;
+    }
+
+    var years = Math.floor(totalMonths / 12);
+    var months = totalMonths % 12;
+
+    if (years === 0 && months === 0) {
+      return 'Less than a month';
+    }
+    if (years === 0) {
+      return months + (months === 1 ? ' month' : ' months');
+    }
+    if (months === 0) {
+      return years + (years === 1 ? ' year' : ' years');
+    }
+    return years + (years === 1 ? ' yr ' : ' yrs ') + months + (months === 1 ? ' mo' : ' mos');
+  }
+
+  // Rolls this agent's Performance Log rows (every QA Stream, every week)
+  // into weekly/monthly/quarterly/yearly periods. Each period's score is a
+  // weighted average across whatever weeks/streams fall in it (weighted by
+  // Number of Audits), so a period with more reviewed audits counts more.
+  // Each entry also gets a 3-period moving average and an improvement %
+  // versus the immediately preceding period.
+  function buildPerformanceTimeline(performanceRows) {
+    var points = performanceRows
+      .map(function (row) {
+        return {
+          date: parseDate(getFieldValue(row, [FIELD_NAMES.weekEnding])),
+          score: toNumber(getFieldValue(row, [FIELD_NAMES.averageScore])),
+          audits: toNumber(getFieldValue(row, [FIELD_NAMES.numberOfAudits])) || 0
+        };
+      })
+      .filter(function (point) {
+        return point.date && typeof point.score === 'number' && !isNaN(point.score);
+      });
+
+    return {
+      weekly: buildTimelinePeriods(points, getWeekPeriodKey, TIMELINE_LIMITS.weekly),
+      monthly: buildTimelinePeriods(points, getMonthPeriodKey, TIMELINE_LIMITS.monthly),
+      quarterly: buildTimelinePeriods(points, getQuarterPeriodKey, TIMELINE_LIMITS.quarterly),
+      yearly: buildTimelinePeriods(points, getYearPeriodKey, TIMELINE_LIMITS.yearly)
+    };
+  }
+
+  function buildTimelinePeriods(points, periodKeyFn, limit) {
+    var periods = {};
+    points.forEach(function (point) {
+      var key = periodKeyFn(point.date);
+      if (!periods[key]) {
+        periods[key] = { periodLabel: key, sortDate: point.date, totalWeightedScore: 0, totalAudits: 0, rowCount: 0 };
+      }
+      var weight = point.audits > 0 ? point.audits : 1;
+      periods[key].totalWeightedScore += point.score * weight;
+      periods[key].totalAudits += weight;
+      periods[key].rowCount += 1;
+      if (point.date.getTime() > periods[key].sortDate.getTime()) {
+        periods[key].sortDate = point.date;
+      }
+    });
+
+    var ordered = Object.keys(periods)
+      .map(function (key) { return periods[key]; })
+      .sort(function (a, b) { return a.sortDate.getTime() - b.sortDate.getTime(); })
+      .map(function (period) {
+        return {
+          periodLabel: period.periodLabel,
+          averageScore: roundNumber(period.totalWeightedScore / period.totalAudits, 2),
+          auditCount: period.totalAudits
+        };
+      });
+
+    var withTrend = ordered.map(function (period, index) {
+      var windowStart = Math.max(0, index - 2);
+      var window = ordered.slice(windowStart, index + 1);
+      var movingAverage = roundNumber(
+        window.reduce(function (sum, p) { return sum + p.averageScore; }, 0) / window.length,
+        2
+      );
+
+      var previous = index > 0 ? ordered[index - 1] : null;
+      var improvementPct = previous && previous.averageScore
+        ? roundNumber(((period.averageScore - previous.averageScore) / previous.averageScore) * 100, 1)
+        : null;
+
+      return {
+        periodLabel: period.periodLabel,
+        averageScore: period.averageScore,
+        auditCount: period.auditCount,
+        movingAverage: movingAverage,
+        improvementPct: improvementPct
+      };
+    });
+
+    return withTrend.slice(Math.max(0, withTrend.length - limit));
+  }
+
+  function getWeekPeriodKey(date) {
+    return formatDate(date);
+  }
+
+  function getMonthPeriodKey(date) {
+    return date.getFullYear() + '-' + padNumber(date.getMonth() + 1, 2);
+  }
+
+  function getQuarterPeriodKey(date) {
+    var quarter = Math.floor(date.getMonth() / 3) + 1;
+    return date.getFullYear() + ' Q' + quarter;
+  }
+
+  function getYearPeriodKey(date) {
+    return String(date.getFullYear());
+  }
+
+  // Evidence-based Strengths / Development Areas, derived ONLY from this
+  // agent's Weekly Review Detail rows (the same source of truth as all
+  // other root cause analytics - never Performance Log). A criterion only
+  // counts as a "strength" once there's enough audit volume behind it
+  // (MIN_AUDITS_FOR_STRENGTH) to avoid claiming a strength from too little
+  // evidence. Development areas include a simple first-half-vs-second-half
+  // trend rather than a fabricated behavioral label.
+  function computeAgentCriteriaAnalysis(agentDetailRows, scorecardCriteria) {
+    var totalAuditsReviewed = agentDetailRows.length;
+    var coachingTipByName = {};
+    scorecardCriteria.forEach(function (criterion) {
+      coachingTipByName[normalizeHeader(criterion.name)] = criterion.coachingTip;
+    });
+
+    var rowsWithParsedDate = agentDetailRows.map(function (row) {
+      return {
+        criteria: uniqueStrings(parseFailedCriteria(getFieldValue(row, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.failedCriteria))),
+        date: parseDate(getFieldValue(row, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.auditDate))
+      };
+    });
+
+    var failureCounts = {};
+    var displayLabels = {};
+    rowsWithParsedDate.forEach(function (row) {
+      row.criteria.forEach(function (criterion) {
+        var key = normalizeHeader(criterion);
+        failureCounts[key] = (failureCounts[key] || 0) + 1;
+        if (!displayLabels[key]) {
+          displayLabels[key] = criterion;
+        }
+      });
+    });
+
+    // Strengths: every scorecard criterion this agent has never (or
+    // essentially never) failed, provided there's enough audit volume to
+    // say so with confidence.
+    var strengths = [];
+    if (totalAuditsReviewed >= MIN_AUDITS_FOR_STRENGTH) {
+      scorecardCriteria.forEach(function (criterion) {
+        var key = normalizeHeader(criterion.name);
+        var failureCount = failureCounts[key] || 0;
+        if (failureCount === 0) {
+          strengths.push({
+            criterion: criterion.name,
+            auditCount: totalAuditsReviewed,
+            note: 'No failures across ' + totalAuditsReviewed + ' audits reviewed'
+          });
+        }
+      });
+      strengths.sort(function (a, b) { return b.auditCount - a.auditCount; });
+    }
+
+    // Development areas: every criterion that WAS cited, with a simple
+    // trend (first half of this agent's audit history vs. second half) and
+    // the last date it occurred.
+    var sortedRows = rowsWithParsedDate.filter(function (row) { return row.date; })
+      .sort(function (a, b) { return a.date.getTime() - b.date.getTime(); });
+    var midpoint = Math.floor(sortedRows.length / 2);
+    var firstHalf = sortedRows.slice(0, midpoint);
+    var secondHalf = sortedRows.slice(midpoint);
+
+    var developmentAreas = Object.keys(failureCounts).map(function (key) {
+      var criterionName = displayLabels[key];
+      var lastOccurrence = null;
+      rowsWithParsedDate.forEach(function (row) {
+        if (row.date && row.criteria.some(function (c) { return normalizeHeader(c) === key; })) {
+          if (!lastOccurrence || row.date.getTime() > lastOccurrence.getTime()) {
+            lastOccurrence = row.date;
+          }
+        }
+      });
+
+      var firstHalfCount = firstHalf.filter(function (row) {
+        return row.criteria.some(function (c) { return normalizeHeader(c) === key; });
+      }).length;
+      var secondHalfCount = secondHalf.filter(function (row) {
+        return row.criteria.some(function (c) { return normalizeHeader(c) === key; });
+      }).length;
+
+      var trend = 'Stable';
+      if (firstHalf.length && secondHalf.length) {
+        var firstRate = firstHalfCount / firstHalf.length;
+        var secondRate = secondHalfCount / secondHalf.length;
+        if (secondRate > firstRate) { trend = 'Increasing'; }
+        else if (secondRate < firstRate) { trend = 'Decreasing'; }
+      } else {
+        trend = 'Insufficient data';
+      }
+
+      return {
+        criterion: criterionName,
+        count: failureCounts[key],
+        trend: trend,
+        lastOccurrence: lastOccurrence ? formatDate(lastOccurrence) : '',
+        coachingTip: coachingTipByName[key] || ''
+      };
+    }).sort(function (a, b) { return b.count - a.count; });
+
+    return {
+      totalAuditsReviewed: totalAuditsReviewed,
+      strengths: strengths,
+      developmentAreas: developmentAreas
+    };
   }
 
   function computeOverallAverage(performanceByStream) {
