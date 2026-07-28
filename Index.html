@@ -542,6 +542,12 @@
                   <option value="">Select an agent</option>
                 </select>
               </div>
+              <div class="field-group">
+                <label>Scorecard Template</label>
+                <select id="reviewTemplate" disabled>
+                  <option value="">Select a department first</option>
+                </select>
+              </div>
             </div>
 
             <div id="auditCardsContainer"></div>
@@ -677,11 +683,81 @@
           <p>About this workspace.</p>
         </div>
       </div>
-      <div class="card" style="padding: var(--space-5); max-width: 520px;">
+      <div class="card" style="padding: var(--space-5); max-width: 640px; margin-bottom: var(--space-5);">
         <p style="margin:0 0 var(--space-3); font-size: 13.5px; color: var(--text-muted);">QA Command Centre reads and writes directly to this Google Sheet. There is no separate database &mdash; every value shown here is calculated live from the Departments, Agents, Coaching Log, Performance Log, and Dispute Log tabs.</p>
-        <p style="margin:0; font-size: 13.5px; color: var(--text-muted);">Individual audit records remain the responsibility of Zendesk, Talkdesk, and D2C reporting &mdash; this tool only stores consolidated weekly performance, coaching sessions, and disputes.</p>
+        <p style="margin:0; font-size: 13.5px; color: var(--text-muted);">Individual audit records remain the responsibility of each line of business's own operational system (e.g. Zendesk, Talkdesk) &mdash; this tool only stores consolidated weekly performance, coaching sessions, and disputes.</p>
       </div>
+
+      <div class="page-header" style="margin-bottom: var(--space-4);">
+        <div>
+          <h1 style="font-size:18px;">Scorecard Templates</h1>
+          <p>Each department can have one or more scorecard templates, versioned over time, each with its own scoring methodology.</p>
+        </div>
+        <button class="btn btn-primary" id="addTemplateButton">+ Add Template</button>
+      </div>
+      <div id="templateTableShell"></div>
     </section>
+
+    <!-- Scorecard Template add/edit modal (dedicated - no agent context needed) -->
+    <div id="templateModalBackdrop" class="modal-backdrop">
+      <div class="modal" style="width: min(600px, 100%);">
+        <div class="modal-header">
+          <h2 id="templateModalTitle">Add Scorecard Template</h2>
+          <button class="btn btn-secondary btn-sm" id="closeTemplateModalButton" type="button">Close</button>
+        </div>
+        <form id="templateForm">
+          <div class="modal-body">
+            <div class="form-grid">
+              <div class="field-group">
+                <label>Template Name</label>
+                <input type="text" name="Template Name" id="templateFieldName">
+              </div>
+              <div class="field-group">
+                <label>Department</label>
+                <select name="Department ID" id="templateFieldDepartment"><option value="">Select a department</option></select>
+              </div>
+              <div class="field-group">
+                <label>Version</label>
+                <input type="text" name="Version" id="templateFieldVersion" placeholder="e.g. 1">
+              </div>
+              <div class="field-group">
+                <label>Status</label>
+                <select name="Status" id="templateFieldStatus">
+                  <option value="Active">Active</option>
+                  <option value="Inactive">Inactive</option>
+                  <option value="Draft">Draft</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label>Effective From</label>
+                <input type="date" name="Effective From" id="templateFieldEffectiveFrom">
+              </div>
+              <div class="field-group">
+                <label>Effective To</label>
+                <input type="date" name="Effective To" id="templateFieldEffectiveTo">
+              </div>
+              <div class="field-group">
+                <label>Scoring Type</label>
+                <input type="text" name="Scoring Type" id="templateFieldScoringType" placeholder="e.g. Weighted Percentage">
+              </div>
+            </div>
+            <div class="field-group" style="margin-top: var(--space-4);">
+              <label>Notes</label>
+              <textarea name="Notes" id="templateFieldNotes"></textarea>
+            </div>
+            <p style="font-size:11.5px; color: var(--text-faint); margin: var(--space-2) 0 0;">
+              Scoring Type is free text so new methodologies can be added without changing this form &mdash;
+              currently recognized values are "Weighted Percentage" and "Critical Failure + Weighted Percentage".
+              Anything else falls back to Weighted Percentage automatically.
+            </p>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" type="button" id="cancelTemplateModalButton">Cancel</button>
+            <button class="btn btn-primary" type="submit" id="saveTemplateModalButton">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
   </main>
 </div>
@@ -729,7 +805,11 @@
     agentCache: {},              // agentId -> getAgentDashboard() result
     agentsByDept: {},            // departmentId -> agents[] (from getAgentsByDepartment)
     logCache: {},                // 'coaching' | 'performance' | 'dispute' -> full log result
-    scorecardCriteria: [],       // [{ name, weight }] from getScorecardCriteria()
+    scorecardCriteria: [],       // criteria for the CURRENTLY SELECTED Scorecard Template, from getScorecardCriteria(templateId)
+    templatesByDepartment: {},   // departmentId -> templates[] from getScorecardTemplatesForDepartment
+    criteriaByTemplate: {},      // templateId -> criteria[] cache
+    selectedTemplateId: '',
+    allTemplatesCache: [],
     activeFormType: '',
     modalContext: null           // { agentId, name } when Add is launched with a known agent
   };
@@ -777,6 +857,16 @@
       openModal('dispute', null);
     });
 
+    document.getElementById('addTemplateButton').addEventListener('click', function () {
+      openTemplateModal(null);
+    });
+    document.getElementById('closeTemplateModalButton').addEventListener('click', closeTemplateModal);
+    document.getElementById('cancelTemplateModalButton').addEventListener('click', closeTemplateModal);
+    document.getElementById('templateForm').addEventListener('submit', handleTemplateFormSubmit);
+    document.getElementById('templateModalBackdrop').addEventListener('click', function (event) {
+      if (event.target.id === 'templateModalBackdrop') { closeTemplateModal(); }
+    });
+
     document.getElementById('coachingSearchInput').addEventListener('input', function (e) {
       renderLogTable('coaching', e.target.value);
     });
@@ -788,6 +878,7 @@
     });
 
     document.getElementById('reviewDepartment').addEventListener('change', handleReviewDepartmentChange);
+    document.getElementById('reviewTemplate').addEventListener('change', handleReviewTemplateChange);
     document.getElementById('generateReviewButton').addEventListener('click', handleGenerateReview);
     document.getElementById('saveReviewButton').addEventListener('click', handleSaveReview);
 
@@ -812,6 +903,7 @@
     if (pageName === 'coachings') { loadLog('coaching'); }
     if (pageName === 'performance') { loadLog('performance'); }
     if (pageName === 'disputes') { loadLog('dispute'); }
+    if (pageName === 'settings') { loadScorecardTemplatesSettings(); }
   }
 
   // ===========================================================================
@@ -823,15 +915,8 @@
       appState.initialData = result;
       populateDepartmentSelects(result.departments || []);
       loadDashboardOverview();
-      loadScorecardCriteria();
-      showStatus('Ready.', 'success');
-    });
-  }
-
-  function loadScorecardCriteria() {
-    callServer('getScorecardCriteria', undefined, function (result) {
-      appState.scorecardCriteria = result.criteria || [];
       renderAuditCards();
+      showStatus('Ready.', 'success');
     });
   }
 
@@ -1455,16 +1540,69 @@
     agentSelect.innerHTML = '<option value="">Select an agent</option>';
     agentSelect.disabled = true;
 
+    var templateSelect = document.getElementById('reviewTemplate');
+    templateSelect.innerHTML = '<option value="">Select a department first</option>';
+    templateSelect.disabled = true;
+    appState.selectedTemplateId = '';
+    appState.scorecardCriteria = [];
+    renderAuditCards();
+
     if (!departmentId) { return; }
 
     if (appState.agentsByDept[departmentId]) {
       populateAgentSelect(agentSelect, appState.agentsByDept[departmentId]);
+    } else {
+      callServer('getAgentsByDepartment', departmentId, function (result) {
+        appState.agentsByDept[departmentId] = result.agents || [];
+        populateAgentSelect(agentSelect, appState.agentsByDept[departmentId]);
+      });
+    }
+
+    if (appState.templatesByDepartment[departmentId]) {
+      populateTemplateSelect(appState.templatesByDepartment[departmentId]);
+    } else {
+      callServer('getScorecardTemplatesForDepartment', departmentId, function (result) {
+        appState.templatesByDepartment[departmentId] = result.templates || [];
+        populateTemplateSelect(appState.templatesByDepartment[departmentId]);
+      });
+    }
+  }
+
+  function populateTemplateSelect(templates) {
+    var templateSelect = document.getElementById('reviewTemplate');
+    templateSelect.innerHTML = '<option value="">Select a scorecard template</option>';
+    templates.forEach(function (template) {
+      var option = document.createElement('option');
+      option.value = template.templateId;
+      option.textContent = template.templateName + (template.version ? ' (v' + template.version + ')' : '');
+      templateSelect.appendChild(option);
+    });
+    templateSelect.disabled = !templates.length;
+    if (!templates.length) {
+      templateSelect.innerHTML = '<option value="">No active templates for this department</option>';
+    }
+  }
+
+  function handleReviewTemplateChange(event) {
+    var templateId = event.target.value;
+    appState.selectedTemplateId = templateId;
+    appState.scorecardCriteria = [];
+    renderAuditCards();
+
+    if (!templateId) { return; }
+
+    if (appState.criteriaByTemplate[templateId]) {
+      appState.scorecardCriteria = appState.criteriaByTemplate[templateId];
+      renderAuditCards();
       return;
     }
 
-    callServer('getAgentsByDepartment', departmentId, function (result) {
-      appState.agentsByDept[departmentId] = result.agents || [];
-      populateAgentSelect(agentSelect, appState.agentsByDept[departmentId]);
+    callServer('getScorecardCriteria', templateId, function (result) {
+      appState.criteriaByTemplate[templateId] = result.criteria || [];
+      if (appState.selectedTemplateId === templateId) {
+        appState.scorecardCriteria = appState.criteriaByTemplate[templateId];
+        renderAuditCards();
+      }
     });
   }
 
@@ -1492,6 +1630,25 @@
 
     for (var j = 1; j <= AUDIT_CARD_COUNT; j += 1) {
       document.getElementById('auditScore' + j).addEventListener('input', updateLiveCalculation);
+
+      (function (index) {
+        Array.prototype.slice.call(
+          document.querySelectorAll('#auditCriteria' + index + ' input[type="checkbox"]')
+        ).forEach(function (checkbox) {
+          checkbox.addEventListener('change', function () { refreshSuggestedScore(index); });
+        });
+
+        var useSuggestedButton = document.getElementById('auditUseSuggested' + index);
+        if (useSuggestedButton) {
+          useSuggestedButton.addEventListener('click', function () {
+            var suggestedValue = useSuggestedButton.getAttribute('data-suggested-value');
+            if (suggestedValue !== null && suggestedValue !== '') {
+              document.getElementById('auditScore' + index).value = suggestedValue;
+              updateLiveCalculation();
+            }
+          });
+        }
+      })(j);
     }
   }
 
@@ -1501,7 +1658,7 @@
       ? appState.scorecardCriteria.map(function (criterion) {
           return '<label><input type="checkbox" name="auditCriteria' + index + '" value="' + escapeAttribute(criterion.name) + '"> ' + escapeHtml(criterion.name) + '</label>';
         }).join('')
-      : '<div class="empty-state">No Scorecard Criteria found.</div>';
+      : '<div class="empty-state">' + (appState.selectedTemplateId ? 'No criteria found for this template.' : 'Select a scorecard template above.') + '</div>';
 
     return (
       '<div class="audit-card">' +
@@ -1512,6 +1669,13 @@
           '<div class="field-group"><label>Interaction ID</label><input type="text" id="auditInteraction' + index + '"></div>' +
           '<div class="field-group"><label>Audit Date</label><input type="date" id="auditDate' + index + '"></div>' +
           '<div class="field-group"><label>Score</label><input type="number" id="auditScore' + index + '" min="0" max="100"></div>' +
+          '<div class="field-group">' +
+            '<label>Suggested Score</label>' +
+            '<div style="display:flex; align-items:center; gap:8px;">' +
+              '<span id="auditSuggested' + index + '" style="font-weight:600; font-size:13.5px; color: var(--text-muted);">Select a template</span>' +
+              '<button type="button" class="btn btn-secondary btn-sm" id="auditUseSuggested' + index + '" style="display:none;">Use this</button>' +
+            '</div>' +
+          '</div>' +
         '</div>' +
         '<div class="field-group" style="margin-bottom: var(--space-3);">' +
           '<label>Failed Criteria</label>' +
@@ -1523,6 +1687,46 @@
         '</div>' +
       '</div>'
     );
+  }
+
+  // Advisory only - calls the server's single scoring engine implementation
+  // so the suggestion always matches exactly what the engine would compute;
+  // never duplicates the scoring formula in client-side JS. Manual Score
+  // entry remains authoritative and is never overwritten automatically.
+  function refreshSuggestedScore(index) {
+    var suggestedSpan = document.getElementById('auditSuggested' + index);
+    var useButton = document.getElementById('auditUseSuggested' + index);
+
+    if (!appState.selectedTemplateId) {
+      suggestedSpan.textContent = 'Select a template';
+      suggestedSpan.style.color = 'var(--text-muted)';
+      useButton.style.display = 'none';
+      return;
+    }
+
+    var checkedBoxes = Array.prototype.slice.call(
+      document.querySelectorAll('#auditCriteria' + index + ' input[type="checkbox"]:checked')
+    );
+    var failedCriteriaNames = checkedBoxes.map(function (box) { return box.value; });
+
+    suggestedSpan.textContent = 'Calculating...';
+    suggestedSpan.style.color = 'var(--text-muted)';
+
+    callServer('getSuggestedAuditScore', [appState.selectedTemplateId, failedCriteriaNames], function (result) {
+      if (result.isCriticalFailure) {
+        suggestedSpan.textContent = 'Critical failure (0%)';
+        suggestedSpan.style.color = 'var(--danger)';
+      } else {
+        suggestedSpan.textContent = formatScore(result.suggestedScore) + '%';
+        suggestedSpan.style.color = 'var(--success)';
+      }
+      useButton.setAttribute('data-suggested-value', result.suggestedScore);
+      useButton.style.display = 'inline-flex';
+    }, function () {
+      suggestedSpan.textContent = 'Unavailable';
+      suggestedSpan.style.color = 'var(--text-faint)';
+      useButton.style.display = 'none';
+    });
   }
 
   // Reads one audit card's fields from the DOM. "attempted" means any field
@@ -1740,6 +1944,12 @@
   }
 
   function resetWeeklyReviewForm() {
+    appState.selectedTemplateId = '';
+    appState.scorecardCriteria = [];
+    var templateSelect = document.getElementById('reviewTemplate');
+    if (templateSelect.options.length) {
+      templateSelect.selectedIndex = 0;
+    }
     renderAuditCards();
     document.getElementById('reviewSummary').value = '';
     document.getElementById('primaryRootCauseDisplay').value = '\u2014';
@@ -1820,6 +2030,144 @@
 
     shell.innerHTML =
       '<div class="table-shell"><table><thead><tr>' + tableHeader + '</tr></thead><tbody>' + tableRows + '</tbody></table></div>';
+  }
+
+  // ===========================================================================
+  // Scorecard Templates (Settings page)
+  // ===========================================================================
+  var templateModalEditingId = '';
+
+  function loadScorecardTemplatesSettings() {
+    var shell = document.getElementById('templateTableShell');
+    shell.innerHTML = '<div class="empty-state">Loading templates...</div>';
+    callServer('getAllScorecardTemplates', undefined, function (result) {
+      appState.allTemplatesCache = result.templates || [];
+      renderTemplateTable();
+    });
+  }
+
+  function renderTemplateTable() {
+    var shell = document.getElementById('templateTableShell');
+    var templates = appState.allTemplatesCache || [];
+
+    if (!templates.length) {
+      shell.innerHTML = '<div class="table-shell"><div class="empty-state">No scorecard templates yet.</div></div>';
+      return;
+    }
+
+    var rows = templates.map(function (template) {
+      var isActive = (template.status || '').toLowerCase() === 'active';
+      return (
+        '<tr>' +
+          '<td>' + escapeHtml(template.templateName) + '</td>' +
+          '<td>' + escapeHtml(template.departmentName) + '</td>' +
+          '<td>' + escapeHtml(template.version) + '</td>' +
+          '<td>' + escapeHtml(template.scoringType || 'N/A') + '</td>' +
+          '<td><span class="badge ' + (isActive ? 'success' : 'neutral') + '">' + escapeHtml(template.status || 'Unknown') + '</span></td>' +
+          '<td>' + escapeHtml(template.effectiveFrom || '') + (template.effectiveTo ? ' \u2013 ' + escapeHtml(template.effectiveTo) : '') + '</td>' +
+          '<td style="white-space:nowrap;">' +
+            '<button class="btn btn-secondary btn-sm" data-edit-template="' + escapeAttribute(template.templateId) + '">Edit</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-toggle-template="' + escapeAttribute(template.templateId) + '">' +
+              (isActive ? 'Deactivate' : 'Activate') +
+            '</button>' +
+          '</td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    shell.innerHTML =
+      '<div class="table-shell"><table><thead><tr>' +
+        '<th>Template</th><th>Department</th><th>Version</th><th>Scoring Type</th><th>Status</th><th>Effective</th><th>Actions</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-edit-template]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        var template = templates.find(function (t) { return t.templateId === button.getAttribute('data-edit-template'); });
+        if (template) { openTemplateModal(template); }
+      });
+    });
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-toggle-template]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        var template = templates.find(function (t) { return t.templateId === button.getAttribute('data-toggle-template'); });
+        if (template) { toggleTemplateStatus(template); }
+      });
+    });
+  }
+
+  function toggleTemplateStatus(template) {
+    var newStatus = (template.status || '').toLowerCase() === 'active' ? 'Inactive' : 'Active';
+    showStatus('Updating template status...', 'info');
+    callServer('updateScorecardTemplate', [template.templateId, { values: { 'Status': newStatus } }], function () {
+      showStatus('Template status updated.', 'success');
+      loadScorecardTemplatesSettings();
+    });
+  }
+
+  function openTemplateModal(existingTemplate) {
+    templateModalEditingId = existingTemplate ? existingTemplate.templateId : '';
+    document.getElementById('templateModalTitle').textContent = existingTemplate ? 'Edit Scorecard Template' : 'Add Scorecard Template';
+
+    var departmentSelect = document.getElementById('templateFieldDepartment');
+    var departments = (appState.initialData && appState.initialData.departments) || [];
+    departmentSelect.innerHTML = '<option value="">Select a department</option>' +
+      departments.map(function (d) {
+        return '<option value="' + escapeAttribute(d.departmentId) + '">' + escapeHtml(d.departmentName) + '</option>';
+      }).join('');
+
+    document.getElementById('templateFieldName').value = existingTemplate ? existingTemplate.templateName : '';
+    departmentSelect.value = existingTemplate ? existingTemplate.departmentId : '';
+    document.getElementById('templateFieldVersion').value = existingTemplate ? existingTemplate.version : '';
+    document.getElementById('templateFieldStatus').value = existingTemplate ? (existingTemplate.status || 'Active') : 'Active';
+    document.getElementById('templateFieldEffectiveFrom').value = existingTemplate ? existingTemplate.effectiveFrom : '';
+    document.getElementById('templateFieldEffectiveTo').value = existingTemplate ? existingTemplate.effectiveTo : '';
+    document.getElementById('templateFieldScoringType').value = existingTemplate ? existingTemplate.scoringType : '';
+    document.getElementById('templateFieldNotes').value = existingTemplate ? existingTemplate.notes : '';
+
+    document.getElementById('templateModalBackdrop').classList.add('open');
+  }
+
+  function closeTemplateModal() {
+    templateModalEditingId = '';
+    document.getElementById('templateForm').reset();
+    document.getElementById('templateModalBackdrop').classList.remove('open');
+  }
+
+  function handleTemplateFormSubmit(event) {
+    event.preventDefault();
+
+    var values = {
+      'Template Name': document.getElementById('templateFieldName').value,
+      'Department ID': document.getElementById('templateFieldDepartment').value,
+      'Version': document.getElementById('templateFieldVersion').value,
+      'Status': document.getElementById('templateFieldStatus').value,
+      'Effective From': document.getElementById('templateFieldEffectiveFrom').value,
+      'Effective To': document.getElementById('templateFieldEffectiveTo').value,
+      'Scoring Type': document.getElementById('templateFieldScoringType').value,
+      'Notes': document.getElementById('templateFieldNotes').value
+    };
+
+    if (!values['Template Name'] || !values['Department ID']) {
+      showStatus('Template Name and Department are required.', 'error');
+      return;
+    }
+
+    var saveButton = document.getElementById('saveTemplateModalButton');
+    saveButton.disabled = true;
+
+    if (templateModalEditingId) {
+      callServer('updateScorecardTemplate', [templateModalEditingId, { values: values }], function (result) {
+        closeTemplateModal();
+        showStatus(result.message || 'Template updated.', 'success');
+        loadScorecardTemplatesSettings();
+      }, function () { saveButton.disabled = false; });
+    } else {
+      callServer('saveScorecardTemplate', { values: values }, function (result) {
+        closeTemplateModal();
+        showStatus(result.message || 'Template saved.', 'success');
+        loadScorecardTemplatesSettings();
+      }, function () { saveButton.disabled = false; });
+    }
   }
 
   // ===========================================================================
