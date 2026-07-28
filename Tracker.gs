@@ -6,6 +6,7 @@ var Tracker = (function () {
     performanceLog: 'Performance Log',
     disputeLog: 'Dispute Log',
     scorecardCriteria: 'Scorecard Criteria',
+    scorecardTemplates: 'Scorecard Templates',
     weeklyReviewDetail: 'Weekly Review Detail'
   };
 
@@ -49,8 +50,32 @@ var Tracker = (function () {
     location: 'Location',
     languages: 'Languages',
     skills: 'Skills',
-    certifications: 'Certifications'
+    certifications: 'Certifications',
+    templateId: 'Template ID',
+    templateName: 'Template Name',
+    version: 'Version',
+    effectiveFrom: 'Effective From',
+    effectiveTo: 'Effective To',
+    templateStatus: 'Status',
+    notes: 'Notes',
+    // Shared header text, used on two different sheets for two different
+    // purposes - always read from the correct sheet's rows, never mixed:
+    //  - Scorecard Templates: overall calculation strategy, e.g.
+    //    "Weighted Percentage" / "Critical Failure + Weighted Percentage"
+    //  - Scorecard Criteria: per-criterion classification, "Weighted" or
+    //    "Fatal" (Fatal = critical/zero-tolerance criterion)
+    scoringType: 'Scoring Type',
+    criteriaId: 'Criteria ID',
+    displayOrder: 'Display Order',
+    parameter: 'Parameter',
+    attribute: 'Attribute',
+    explanation: 'Explanation'
   };
+
+  // Normalized (lowercase, alnum-only) Scoring Type values.
+  var CRITERION_SCORING_TYPE_FATAL = 'fatal';
+  var TEMPLATE_SCORING_TYPE_WEIGHTED = 'weightedpercentage';
+  var TEMPLATE_SCORING_TYPE_CRITICAL = 'criticalfailureweightedpercentage';
 
   var MIN_AUDITS_FOR_STRENGTH = 3;
   var TIMELINE_LIMITS = { weekly: 26, monthly: 12, quarterly: 8, yearly: 5 };
@@ -85,6 +110,11 @@ var Tracker = (function () {
     header: FIELD_NAMES.detailId,
     prefix: 'WRD-',
     padLength: 6
+  };
+  ID_GENERATION_CONFIG[SHEETS.scorecardTemplates] = {
+    header: FIELD_NAMES.templateId,
+    prefix: 'TPL-',
+    padLength: 4
   };
 
   // Weekly Review Detail header names have drifted from FIELD_NAMES in the
@@ -218,7 +248,7 @@ var Tracker = (function () {
     var openDisputeCount = countOpenDisputes(disputeRows);
     var openActionCount = countOpenActions(coachingRows);
 
-    var scorecardCriteria = getScorecardCriteria().criteria;
+    var scorecardCriteria = getAllActiveCriteriaAcrossTemplates().criteria;
     var performanceTimeline = buildPerformanceTimeline(performanceRows);
     var criteriaAnalysis = computeAgentCriteriaAnalysis(agentDetailRows, scorecardCriteria);
 
@@ -512,9 +542,21 @@ var Tracker = (function () {
       .filter(function (value) { return value; });
   }
 
-  function getScorecardCriteria() {
+  // Broad, non-template-scoped view of every active criterion across every
+  // template. Used only where a specific audit's template can't be reliably
+  // determined after the fact (Weekly Review Detail doesn't store Template
+  // ID, per the "no schema changes" constraint): the legacy Primary/
+  // Secondary Root Cause tie-break weight lookup, and the Agent Profile
+  // Strengths analysis. New Weekly Reviews should use getScorecardCriteria
+  // (templateId) instead, which is template-scoped and authoritative.
+  function getAllActiveCriteriaAcrossTemplates() {
     var criteriaData = readSheet(SHEETS.scorecardCriteria);
+    var seen = {};
     var criteria = criteriaData.rows
+      .filter(function (row) {
+        var activeHeader = findHeader(criteriaData.headers, [FIELD_NAMES.active]);
+        return !activeHeader || isTruthyValue(getFieldValue(row, [FIELD_NAMES.active]));
+      })
       .map(function (row) {
         return {
           name: toSafeString(getFieldValue(row, [FIELD_NAMES.criterionName])),
@@ -523,7 +565,11 @@ var Tracker = (function () {
         };
       })
       .filter(function (criterion) {
-        return criterion.name;
+        if (!criterion.name) { return false; }
+        var key = normalizeHeader(criterion.name);
+        if (seen[key]) { return false; }
+        seen[key] = true;
+        return true;
       })
       .sort(function (a, b) {
         return a.name.localeCompare(b.name);
@@ -532,6 +578,311 @@ var Tracker = (function () {
     return {
       success: true,
       criteria: criteria
+    };
+  }
+
+  // Template-scoped criteria list: the authoritative source for the Weekly
+  // Review workflow and the scoring engine. Filters by Template ID and
+  // Active, sorted by Display Order. Each criterion includes its own
+  // Scoring Type ("Weighted"/"Fatal") so the scoring engine can partition
+  // critical vs. general criteria without any naming-convention guessing.
+  function getScorecardCriteria(templateId) {
+    var requestedTemplateId = toSafeString(templateId);
+    if (!requestedTemplateId) {
+      return {
+        success: false,
+        message: 'A Scorecard Template ID is required to load its criteria.',
+        criteria: []
+      };
+    }
+
+    var criteriaData = readSheet(SHEETS.scorecardCriteria);
+    var activeHeader = findHeader(criteriaData.headers, [FIELD_NAMES.active]);
+
+    var criteria = criteriaData.rows
+      .filter(function (row) {
+        return toSafeString(getFieldValue(row, [FIELD_NAMES.templateId])) === requestedTemplateId;
+      })
+      .filter(function (row) {
+        return !activeHeader || isTruthyValue(getFieldValue(row, [FIELD_NAMES.active]));
+      })
+      .map(function (row) {
+        var criterionScoringType = toSafeString(getFieldValue(row, [FIELD_NAMES.scoringType]));
+        return {
+          criteriaId: toSafeString(getFieldValue(row, [FIELD_NAMES.criteriaId])),
+          name: toSafeString(getFieldValue(row, [FIELD_NAMES.criterionName])),
+          weight: toNumber(getFieldValue(row, [FIELD_NAMES.criterionWeight])) || 0,
+          parameter: toSafeString(getFieldValue(row, [FIELD_NAMES.parameter])),
+          attribute: toSafeString(getFieldValue(row, [FIELD_NAMES.attribute])),
+          explanation: toSafeString(getFieldValue(row, [FIELD_NAMES.explanation])),
+          coachingTip: toSafeString(getFieldValue(row, [FIELD_NAMES.coachingTip])),
+          scoringType: criterionScoringType,
+          isCritical: normalizeHeader(criterionScoringType) === CRITERION_SCORING_TYPE_FATAL,
+          displayOrder: toNumber(getFieldValue(row, [FIELD_NAMES.displayOrder]))
+        };
+      })
+      .filter(function (criterion) {
+        return criterion.name;
+      })
+      .sort(function (a, b) {
+        var orderA = typeof a.displayOrder === 'number' ? a.displayOrder : Number.MAX_SAFE_INTEGER;
+        var orderB = typeof b.displayOrder === 'number' ? b.displayOrder : Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) { return orderA - orderB; }
+        return a.name.localeCompare(b.name);
+      });
+
+    return {
+      success: true,
+      templateId: requestedTemplateId,
+      criteria: criteria
+    };
+  }
+
+  // Active templates for a Department, sorted most-recent-version-first.
+  // "Active" here means Status normalizes to a truthy/active-like value AND
+  // today falls within [Effective From, Effective To] when either bound is
+  // set (an unset bound is treated as unbounded on that side).
+  function getScorecardTemplatesForDepartment(departmentId) {
+    var requestedDepartmentId = toSafeString(departmentId);
+    if (!requestedDepartmentId) {
+      return { success: false, message: 'A department is required.', templates: [] };
+    }
+
+    var templateData = readSheet(SHEETS.scorecardTemplates);
+    var today = new Date();
+
+    var templates = templateData.rows
+      .filter(function (row) {
+        return toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId])) === requestedDepartmentId;
+      })
+      .filter(function (row) {
+        return isTemplateCurrentlyActive(row, today);
+      })
+      .map(mapScorecardTemplateRow)
+      .sort(function (a, b) {
+        return (toNumber(b.version) || 0) - (toNumber(a.version) || 0);
+      });
+
+    return { success: true, templates: templates };
+  }
+
+  // Every template regardless of status/date, for the Settings admin table.
+  function getAllScorecardTemplates() {
+    var departmentData = readSheet(SHEETS.departments);
+    var departmentNameById = {};
+    departmentData.rows.forEach(function (row) {
+      departmentNameById[toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId]))] =
+        toSafeString(getFieldValue(row, [FIELD_NAMES.departmentName]));
+    });
+
+    var templateData = readSheet(SHEETS.scorecardTemplates);
+    var templates = templateData.rows
+      .map(function (row) {
+        var mapped = mapScorecardTemplateRow(row);
+        mapped.departmentName = departmentNameById[mapped.departmentId] || mapped.departmentId;
+        return mapped;
+      })
+      .sort(function (a, b) {
+        if (a.departmentName !== b.departmentName) { return a.departmentName.localeCompare(b.departmentName); }
+        return (toNumber(b.version) || 0) - (toNumber(a.version) || 0);
+      });
+
+    return { success: true, templates: templates };
+  }
+
+  function mapScorecardTemplateRow(row) {
+    return {
+      templateId: toSafeString(getFieldValue(row, [FIELD_NAMES.templateId])),
+      templateName: toSafeString(getFieldValue(row, [FIELD_NAMES.templateName])),
+      departmentId: toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId])),
+      version: toSafeString(getFieldValue(row, [FIELD_NAMES.version])),
+      effectiveFrom: serializeValue(getFieldValue(row, [FIELD_NAMES.effectiveFrom])),
+      effectiveTo: serializeValue(getFieldValue(row, [FIELD_NAMES.effectiveTo])),
+      status: toSafeString(getFieldValue(row, [FIELD_NAMES.templateStatus])),
+      notes: toSafeString(getFieldValue(row, [FIELD_NAMES.notes])),
+      scoringType: toSafeString(getFieldValue(row, [FIELD_NAMES.scoringType]))
+    };
+  }
+
+  function isTemplateCurrentlyActive(row, today) {
+    var status = toSafeString(getFieldValue(row, [FIELD_NAMES.templateStatus])).toLowerCase();
+    if (status && status !== 'active') {
+      return false;
+    }
+
+    var effectiveFrom = parseDate(getFieldValue(row, [FIELD_NAMES.effectiveFrom]));
+    var effectiveTo = parseDate(getFieldValue(row, [FIELD_NAMES.effectiveTo]));
+
+    if (effectiveFrom && today.getTime() < effectiveFrom.getTime()) {
+      return false;
+    }
+    if (effectiveTo && today.getTime() > effectiveTo.getTime()) {
+      return false;
+    }
+    return true;
+  }
+
+  // Creates a new Scorecard Template. Header-driven, like every other save
+  // function - Template ID is auto-generated, every other provided value is
+  // matched to the sheet's actual header text so column order/wording never
+  // has to be hardcoded.
+  function saveScorecardTemplate(payload) {
+    var templateData = readSheet(SHEETS.scorecardTemplates);
+    var values = (payload && payload.values) || {};
+
+    if (!templateData.headers.length) {
+      throw new Error(SHEETS.scorecardTemplates + ' must contain a header row before data can be saved.');
+    }
+
+    var templateId = generateNextSequentialId(templateData.rows, [FIELD_NAMES.templateId], 'TPL-', 4);
+
+    var row = templateData.headers.map(function (header) {
+      if (normalizeHeader(header) === normalizeHeader(FIELD_NAMES.templateId)) {
+        return templateId;
+      }
+      return coerceValueForSheet(header, getPayloadValue(values, header));
+    });
+
+    templateData.sheet.appendRow(row);
+
+    return {
+      success: true,
+      message: 'Scorecard template saved successfully (' + templateId + ').',
+      templateId: templateId
+    };
+  }
+
+  // Updates an existing Scorecard Template in place (used for editing and
+  // for activate/deactivate). Only columns present in the payload's values
+  // are touched; Template ID itself is never overwritten.
+  function updateScorecardTemplate(templateId, payload) {
+    var requestedTemplateId = toSafeString(templateId);
+    if (!requestedTemplateId) {
+      throw new Error('A Template ID is required to update a scorecard template.');
+    }
+
+    var templateData = readSheet(SHEETS.scorecardTemplates);
+    var values = (payload && payload.values) || {};
+
+    var rowIndex = -1;
+    var existingRow = null;
+    for (var i = 0; i < templateData.rows.length; i += 1) {
+      if (toSafeString(getFieldValue(templateData.rows[i], [FIELD_NAMES.templateId])) === requestedTemplateId) {
+        rowIndex = templateData.rows[i]._rowNumber;
+        existingRow = templateData.rows[i];
+        break;
+      }
+    }
+
+    if (rowIndex === -1) {
+      throw new Error('Scorecard template ' + requestedTemplateId + ' could not be found.');
+    }
+
+    var updatedRow = templateData.headers.map(function (header) {
+      if (normalizeHeader(header) === normalizeHeader(FIELD_NAMES.templateId)) {
+        return requestedTemplateId;
+      }
+      if (Object.prototype.hasOwnProperty.call(values, header) ||
+        Object.keys(values).some(function (key) { return normalizeHeader(key) === normalizeHeader(header); })) {
+        return coerceValueForSheet(header, getPayloadValue(values, header));
+      }
+      return serializeValue(getFieldValue(existingRow, [header]));
+    });
+
+    templateData.sheet.getRange(rowIndex, 1, 1, templateData.headers.length).setValues([updatedRow]);
+
+    return {
+      success: true,
+      message: 'Scorecard template ' + requestedTemplateId + ' updated successfully.'
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Scoring engine: a registry keyed by the Scorecard Template's own
+  // Scoring Type value - never a hardcoded LOB/department name. Adding a
+  // future scoring type means adding one new entry to SCORING_STRATEGIES,
+  // nothing else changes.
+  // ---------------------------------------------------------------------
+
+  var SCORING_STRATEGIES = {};
+
+  SCORING_STRATEGIES[TEMPLATE_SCORING_TYPE_WEIGHTED] = function (criteria, failedCriteriaNames) {
+    var score = computeWeightedDeductionScore(criteria, failedCriteriaNames);
+    return { score: score, isCriticalFailure: false };
+  };
+
+  SCORING_STRATEGIES[TEMPLATE_SCORING_TYPE_CRITICAL] = function (criteria, failedCriteriaNames) {
+    var criticalCriteria = criteria.filter(function (c) { return c.isCritical; });
+    var generalCriteria = criteria.filter(function (c) { return !c.isCritical; });
+
+    var failedCritical = criticalCriteria.some(function (criterion) {
+      return failedCriteriaNames.some(function (failedName) {
+        return normalizeHeader(failedName) === normalizeHeader(criterion.name);
+      });
+    });
+
+    if (failedCritical) {
+      return { score: 0, isCriticalFailure: true };
+    }
+
+    var score = computeWeightedDeductionScore(generalCriteria, failedCriteriaNames);
+    return { score: score, isCriticalFailure: false };
+  };
+
+  // Deduction model: start at 100, subtract the Weight of every criterion
+  // (from the given criteria set) that was marked failed for this audit.
+  // Clamped to [0, 100] as a safety guard against misconfigured weights.
+  function computeWeightedDeductionScore(criteria, failedCriteriaNames) {
+    var totalDeduction = criteria.reduce(function (sum, criterion) {
+      var wasFailed = failedCriteriaNames.some(function (failedName) {
+        return normalizeHeader(failedName) === normalizeHeader(criterion.name);
+      });
+      return sum + (wasFailed ? criterion.weight : 0);
+    }, 0);
+
+    var score = 100 - totalDeduction;
+    return Math.max(0, Math.min(100, roundNumber(score, 2)));
+  }
+
+  // Resolves a template's Scoring Type and computes a suggested score for
+  // one audit's selected Failed Criteria. This is advisory only - it never
+  // writes anywhere, and manual Score entry in the Weekly Review remains
+  // authoritative. Falls back to the Weighted Percentage strategy (and
+  // flags usedFallbackStrategy) for templates with a blank/unrecognized
+  // Scoring Type, so older templates keep working unchanged.
+  function getSuggestedAuditScore(templateId, failedCriteriaNames) {
+    var requestedTemplateId = toSafeString(templateId);
+    if (!requestedTemplateId) {
+      return { success: false, message: 'A Scorecard Template is required to suggest a score.' };
+    }
+
+    var templateData = readSheet(SHEETS.scorecardTemplates);
+    var templateRow = findRowByField(templateData.rows, FIELD_NAMES.templateId, requestedTemplateId);
+    if (!templateRow) {
+      return { success: false, message: 'Scorecard template ' + requestedTemplateId + ' could not be found.' };
+    }
+
+    var rawScoringType = toSafeString(getFieldValue(templateRow, [FIELD_NAMES.scoringType]));
+    var normalizedScoringType = normalizeHeader(rawScoringType);
+    var strategy = SCORING_STRATEGIES[normalizedScoringType];
+    var usedFallbackStrategy = false;
+
+    if (!strategy) {
+      strategy = SCORING_STRATEGIES[TEMPLATE_SCORING_TYPE_WEIGHTED];
+      usedFallbackStrategy = true;
+    }
+
+    var criteria = getScorecardCriteria(requestedTemplateId).criteria;
+    var failedNames = Array.isArray(failedCriteriaNames) ? failedCriteriaNames : [];
+    var result = strategy(criteria, failedNames);
+
+    return {
+      success: true,
+      templateId: requestedTemplateId,
+      scoringType: rawScoringType,
+      usedFallbackStrategy: usedFallbackStrategy,
+      suggestedScore: result.score,
+      isCriticalFailure: result.isCriticalFailure
     };
   }
 
@@ -732,7 +1083,7 @@ var Tracker = (function () {
     }
 
     var weightByName = {};
-    getScorecardCriteria().criteria.forEach(function (criterion) {
+    getAllActiveCriteriaAcrossTemplates().criteria.forEach(function (criterion) {
       weightByName[normalizeHeader(criterion.name)] = criterion.weight;
     });
 
@@ -1876,6 +2227,11 @@ var Tracker = (function () {
     getAllPerformanceRecords: getAllPerformanceRecords,
     getAllDisputeRecords: getAllDisputeRecords,
     getScorecardCriteria: getScorecardCriteria,
+    getScorecardTemplatesForDepartment: getScorecardTemplatesForDepartment,
+    getAllScorecardTemplates: getAllScorecardTemplates,
+    saveScorecardTemplate: saveScorecardTemplate,
+    updateScorecardTemplate: updateScorecardTemplate,
+    getSuggestedAuditScore: getSuggestedAuditScore,
     saveWeeklyReview: saveWeeklyReview
   };
 })();
