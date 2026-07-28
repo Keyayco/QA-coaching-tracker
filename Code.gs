@@ -76,9 +76,39 @@ function getAllDisputeRecords() {
   });
 }
 
-function getScorecardCriteria() {
+function getScorecardCriteria(templateId) {
   return runSafely(function () {
-    return Tracker.getScorecardCriteria();
+    return Tracker.getScorecardCriteria(templateId);
+  });
+}
+
+function getScorecardTemplatesForDepartment(departmentId) {
+  return runSafely(function () {
+    return Tracker.getScorecardTemplatesForDepartment(departmentId);
+  });
+}
+
+function getAllScorecardTemplates() {
+  return runSafely(function () {
+    return Tracker.getAllScorecardTemplates();
+  });
+}
+
+function saveScorecardTemplate(payload) {
+  return runSafely(function () {
+    return Tracker.saveScorecardTemplate(payload);
+  });
+}
+
+function updateScorecardTemplate(templateId, payload) {
+  return runSafely(function () {
+    return Tracker.updateScorecardTemplate(templateId, payload);
+  });
+}
+
+function getSuggestedAuditScore(templateId, failedCriteriaNames) {
+  return runSafely(function () {
+    return Tracker.getSuggestedAuditScore(templateId, failedCriteriaNames);
   });
 }
 
@@ -101,4 +131,3 @@ function runSafely(callback) {
     };
   }
 }
- 
