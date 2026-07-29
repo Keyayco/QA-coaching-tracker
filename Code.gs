@@ -112,6 +112,42 @@ function getSuggestedAuditScore(templateId, failedCriteriaNames) {
   });
 }
 
+function getScorecardCriteriaForBuilder(templateId) {
+  return runSafely(function () {
+    return Tracker.getScorecardCriteriaForBuilder(templateId);
+  });
+}
+
+function saveScorecardCriterion(payload) {
+  return runSafely(function () {
+    return Tracker.saveScorecardCriterion(payload);
+  });
+}
+
+function updateScorecardCriterion(criteriaId, payload) {
+  return runSafely(function () {
+    return Tracker.updateScorecardCriterion(criteriaId, payload);
+  });
+}
+
+function reorderScorecardCriteria(templateId, orderedCriteriaIds) {
+  return runSafely(function () {
+    return Tracker.reorderScorecardCriteria(templateId, orderedCriteriaIds);
+  });
+}
+
+function duplicateScorecardTemplate(templateId) {
+  return runSafely(function () {
+    return Tracker.duplicateScorecardTemplate(templateId);
+  });
+}
+
+function createNewTemplateVersion(templateId, activateAndDeactivatePrevious) {
+  return runSafely(function () {
+    return Tracker.createNewTemplateVersion(templateId, activateAndDeactivatePrevious);
+  });
+}
+
 function saveWeeklyReview(payload) {
   return runSafely(function () {
     return Tracker.saveWeeklyReview(payload);
