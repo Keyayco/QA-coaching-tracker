@@ -281,6 +281,22 @@
   .development-card .dev-meta { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-faint); margin-top: var(--space-2); }
   .development-card .coaching-tip { margin-top: var(--space-2); padding: 8px 10px; background: var(--surface-alt); border-radius: var(--radius-sm); font-size: 12px; color: var(--text); }
 
+  .criterion-row {
+    display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3);
+    border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; background: var(--surface);
+    cursor: grab;
+  }
+  .criterion-row.dragging { opacity: 0.5; }
+  .criterion-row.inactive { opacity: 0.55; }
+  .criterion-row .drag-handle { color: var(--text-faint); font-size: 16px; user-select: none; }
+  .criterion-row .criterion-main { flex: 1; min-width: 0; }
+  .criterion-row .criterion-title { font-weight: 600; font-size: 13.5px; }
+  .criterion-row .criterion-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+  .criterion-row .criterion-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .criterion-row input[type="text"], .criterion-row input[type="number"] {
+    padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 12.5px;
+  }
+
   /* ---------- Stream cards (existing) ---------- */
 
   .root-cause-row {
@@ -759,6 +775,60 @@
       </div>
     </div>
 
+    <!-- Version Safety: choose to edit the active version in place or branch a new version -->
+    <div id="versionChoiceModalBackdrop" class="modal-backdrop">
+      <div class="modal" style="width: min(480px, 100%);">
+        <div class="modal-header">
+          <h2>Edit an Active Template</h2>
+        </div>
+        <p style="font-size: 13.5px; color: var(--text-muted); margin: 0 0 var(--space-4);">
+          <strong id="versionChoiceTemplateName"></strong> is currently Active. Editing it in place changes it for
+          everyone using it right now. To change it safely without affecting live audits, create a new version instead.
+        </p>
+        <div class="modal-actions" style="justify-content: flex-start; flex-wrap: wrap;">
+          <button class="btn btn-primary" id="createNewVersionButton" type="button">Create New Version</button>
+          <button class="btn btn-secondary" id="editCurrentVersionButton" type="button">Edit Current Version Anyway</button>
+          <button class="btn btn-secondary" id="cancelVersionChoiceButton" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scorecard Builder: full CRUD + drag-and-drop reordering for one template's criteria -->
+    <div id="builderModalBackdrop" class="modal-backdrop">
+      <div class="modal" style="width: min(960px, 100%);">
+        <div class="modal-header">
+          <h2 id="builderModalTitle">Scorecard Builder</h2>
+          <button class="btn btn-secondary btn-sm" id="closeBuilderModalButton" type="button">Close</button>
+        </div>
+        <div id="builderCriteriaList"></div>
+        <div class="card review-panel" style="margin-top: var(--space-4);">
+          <h3 style="font-size:14px; margin-bottom: var(--space-3);">Add Criterion</h3>
+          <form id="criterionForm">
+            <div class="form-grid">
+              <div class="field-group"><label>Criterion Name</label><input type="text" id="criterionFieldName"></div>
+              <div class="field-group"><label>Weight</label><input type="number" id="criterionFieldWeight" min="0" max="100"></div>
+              <div class="field-group">
+                <label>Scoring Type</label>
+                <select id="criterionFieldScoringType">
+                  <option value="Weighted">Weighted</option>
+                  <option value="Fatal">Fatal (Critical)</option>
+                </select>
+              </div>
+              <div class="field-group"><label>Parameter</label><input type="text" id="criterionFieldParameter"></div>
+              <div class="field-group"><label>Attribute</label><input type="text" id="criterionFieldAttribute"></div>
+            </div>
+            <div class="field-group" style="margin-top: var(--space-3);">
+              <label>Explanation</label>
+              <textarea id="criterionFieldExplanation"></textarea>
+            </div>
+            <div class="modal-actions">
+              <button class="btn btn-primary" type="submit" id="saveCriterionButton">Add Criterion</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -866,6 +936,12 @@
     document.getElementById('templateModalBackdrop').addEventListener('click', function (event) {
       if (event.target.id === 'templateModalBackdrop') { closeTemplateModal(); }
     });
+
+    document.getElementById('closeBuilderModalButton').addEventListener('click', closeScorecardBuilder);
+    document.getElementById('builderModalBackdrop').addEventListener('click', function (event) {
+      if (event.target.id === 'builderModalBackdrop') { closeScorecardBuilder(); }
+    });
+    document.getElementById('criterionForm').addEventListener('submit', handleAddCriterionSubmit);
 
     document.getElementById('coachingSearchInput').addEventListener('input', function (e) {
       renderLogTable('coaching', e.target.value);
@@ -2057,16 +2133,25 @@
 
     var rows = templates.map(function (template) {
       var isActive = (template.status || '').toLowerCase() === 'active';
+      var versionHistoryLabel = (template.versionHistory || []).map(function (v) {
+        return 'v' + v.version + (v.templateId === template.templateId ? ' (this)' : '');
+      }).join(', ');
+
       return (
         '<tr>' +
           '<td>' + escapeHtml(template.templateName) + '</td>' +
           '<td>' + escapeHtml(template.departmentName) + '</td>' +
-          '<td>' + escapeHtml(template.version) + '</td>' +
+          '<td title="' + escapeAttribute(versionHistoryLabel) + '">' + escapeHtml(template.version) +
+            (template.versionHistory && template.versionHistory.length > 1 ? ' <span class="badge neutral">' + template.versionHistory.length + ' versions</span>' : '') +
+          '</td>' +
           '<td>' + escapeHtml(template.scoringType || 'N/A') + '</td>' +
           '<td><span class="badge ' + (isActive ? 'success' : 'neutral') + '">' + escapeHtml(template.status || 'Unknown') + '</span></td>' +
+          '<td>' + escapeHtml(toDisplayString(template.criteriaCount)) + '</td>' +
           '<td>' + escapeHtml(template.effectiveFrom || '') + (template.effectiveTo ? ' \u2013 ' + escapeHtml(template.effectiveTo) : '') + '</td>' +
           '<td style="white-space:nowrap;">' +
             '<button class="btn btn-secondary btn-sm" data-edit-template="' + escapeAttribute(template.templateId) + '">Edit</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-manage-criteria="' + escapeAttribute(template.templateId) + '">Criteria</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-duplicate-template="' + escapeAttribute(template.templateId) + '">Duplicate</button> ' +
             '<button class="btn btn-secondary btn-sm" data-toggle-template="' + escapeAttribute(template.templateId) + '">' +
               (isActive ? 'Deactivate' : 'Activate') +
             '</button>' +
@@ -2077,13 +2162,13 @@
 
     shell.innerHTML =
       '<div class="table-shell"><table><thead><tr>' +
-        '<th>Template</th><th>Department</th><th>Version</th><th>Scoring Type</th><th>Status</th><th>Effective</th><th>Actions</th>' +
+        '<th>Template</th><th>Department</th><th>Version</th><th>Scoring Type</th><th>Status</th><th>Criteria</th><th>Effective</th><th>Actions</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 
     Array.prototype.slice.call(document.querySelectorAll('[data-edit-template]')).forEach(function (button) {
       button.addEventListener('click', function () {
         var template = templates.find(function (t) { return t.templateId === button.getAttribute('data-edit-template'); });
-        if (template) { openTemplateModal(template); }
+        if (template) { handleEditTemplateClick(template); }
       });
     });
 
@@ -2092,6 +2177,73 @@
         var template = templates.find(function (t) { return t.templateId === button.getAttribute('data-toggle-template'); });
         if (template) { toggleTemplateStatus(template); }
       });
+    });
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-duplicate-template]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        var template = templates.find(function (t) { return t.templateId === button.getAttribute('data-duplicate-template'); });
+        if (template) { handleDuplicateTemplate(template); }
+      });
+    });
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-manage-criteria]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        var template = templates.find(function (t) { return t.templateId === button.getAttribute('data-manage-criteria'); });
+        if (template) { openScorecardBuilder(template); }
+      });
+    });
+  }
+
+  // Version Safety: editing an Active template asks whether to edit it in
+  // place or branch off a new version first. Draft/Inactive templates skip
+  // straight to the normal edit form since there's no live audience to
+  // protect from an in-place change.
+  function handleEditTemplateClick(template) {
+    var isActive = (template.status || '').toLowerCase() === 'active';
+    if (!isActive) {
+      openTemplateModal(template);
+      return;
+    }
+
+    openVersionChoiceModal(template);
+  }
+
+  function openVersionChoiceModal(template) {
+    var backdrop = document.getElementById('versionChoiceModalBackdrop');
+    document.getElementById('versionChoiceTemplateName').textContent = template.templateName + ' (v' + template.version + ')';
+    backdrop.classList.add('open');
+
+    document.getElementById('editCurrentVersionButton').onclick = function () {
+      backdrop.classList.remove('open');
+      openTemplateModal(template);
+    };
+    document.getElementById('createNewVersionButton').onclick = function () {
+      backdrop.classList.remove('open');
+      handleCreateNewVersion(template);
+    };
+    document.getElementById('cancelVersionChoiceButton').onclick = function () {
+      backdrop.classList.remove('open');
+    };
+  }
+
+  function handleCreateNewVersion(template) {
+    var activateNow = window.confirm(
+      'Create version ' + (parseInt(template.version, 10) || 1) + ' + 1 of "' + template.templateName + '".\n\n' +
+      'Activate it immediately and deactivate v' + template.version + '? (Cancel keeps v' + template.version + ' active until you switch over manually.)'
+    );
+
+    showStatus('Creating new version...', 'info');
+    callServer('createNewTemplateVersion', [template.templateId, activateNow], function (result) {
+      showStatus(result.message || 'New version created.', 'success');
+      loadScorecardTemplatesSettings();
+    });
+  }
+
+  function handleDuplicateTemplate(template) {
+    showStatus('Duplicating template...', 'info');
+    callServer('duplicateScorecardTemplate', template.templateId, function (result) {
+      showStatus(result.message || 'Template duplicated.', 'success');
+      loadScorecardTemplatesSettings();
     });
   }
 
@@ -2168,6 +2320,190 @@
         loadScorecardTemplatesSettings();
       }, function () { saveButton.disabled = false; });
     }
+  }
+
+  // ===========================================================================
+  // Scorecard Builder: view/add/edit/reorder criteria for one template
+  // ===========================================================================
+  var builderActiveTemplateId = '';
+  var builderCriteriaCache = [];
+  var builderDragSourceId = '';
+
+  function openScorecardBuilder(template) {
+    builderActiveTemplateId = template.templateId;
+    document.getElementById('builderModalTitle').textContent = 'Scorecard Builder \u2014 ' + template.templateName + ' (v' + template.version + ')';
+    document.getElementById('criterionForm').reset();
+    document.getElementById('builderModalBackdrop').classList.add('open');
+    loadBuilderCriteria();
+  }
+
+  function closeScorecardBuilder() {
+    builderActiveTemplateId = '';
+    builderCriteriaCache = [];
+    document.getElementById('builderModalBackdrop').classList.remove('open');
+  }
+
+  function loadBuilderCriteria() {
+    var list = document.getElementById('builderCriteriaList');
+    list.innerHTML = '<div class="empty-state">Loading criteria...</div>';
+    callServer('getScorecardCriteriaForBuilder', builderActiveTemplateId, function (result) {
+      builderCriteriaCache = result.criteria || [];
+      renderBuilderCriteriaList();
+    });
+  }
+
+  function renderBuilderCriteriaList() {
+    var list = document.getElementById('builderCriteriaList');
+
+    if (!builderCriteriaCache.length) {
+      list.innerHTML = '<div class="empty-state">No criteria yet - add the first one below.</div>';
+      return;
+    }
+
+    list.innerHTML = builderCriteriaCache.map(function (criterion) {
+      return (
+        '<div class="criterion-row' + (criterion.active ? '' : ' inactive') + '" draggable="true" data-criterion-id="' + escapeAttribute(criterion.criteriaId) + '">' +
+          '<span class="drag-handle">\u2630</span>' +
+          '<div class="criterion-main">' +
+            '<div class="criterion-title">' + escapeHtml(criterion.name) +
+              (criterion.scoringType && criterion.scoringType.toLowerCase() === 'fatal' ? ' <span class="badge danger">Fatal</span>' : '') +
+              (!criterion.active ? ' <span class="badge neutral">Inactive</span>' : '') +
+            '</div>' +
+            '<div class="criterion-sub">Weight ' + escapeHtml(toDisplayString(criterion.weight)) +
+              (criterion.parameter ? ' \u2022 ' + escapeHtml(criterion.parameter) : '') +
+              (criterion.attribute ? ' \u2022 ' + escapeHtml(criterion.attribute) : '') +
+            '</div>' +
+          '</div>' +
+          '<div class="criterion-actions">' +
+            '<button type="button" class="btn btn-secondary btn-sm" data-edit-criterion="' + escapeAttribute(criterion.criteriaId) + '">Edit</button>' +
+            '<button type="button" class="btn btn-secondary btn-sm" data-toggle-criterion="' + escapeAttribute(criterion.criteriaId) + '">' +
+              (criterion.active ? 'Deactivate' : 'Activate') +
+            '</button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+
+    bindBuilderRowEvents();
+  }
+
+  function bindBuilderRowEvents() {
+    var rows = Array.prototype.slice.call(document.querySelectorAll('.criterion-row'));
+
+    rows.forEach(function (row) {
+      row.addEventListener('dragstart', function () {
+        builderDragSourceId = row.getAttribute('data-criterion-id');
+        row.classList.add('dragging');
+      });
+      row.addEventListener('dragend', function () {
+        row.classList.remove('dragging');
+      });
+      row.addEventListener('dragover', function (event) {
+        event.preventDefault();
+      });
+      row.addEventListener('drop', function (event) {
+        event.preventDefault();
+        var targetId = row.getAttribute('data-criterion-id');
+        if (!builderDragSourceId || builderDragSourceId === targetId) { return; }
+        reorderBuilderCriteriaLocally(builderDragSourceId, targetId);
+      });
+    });
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-edit-criterion]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        var criterion = builderCriteriaCache.find(function (c) { return c.criteriaId === button.getAttribute('data-edit-criterion'); });
+        if (criterion) { openEditCriterionPrompt(criterion); }
+      });
+    });
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-toggle-criterion]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        var criterion = builderCriteriaCache.find(function (c) { return c.criteriaId === button.getAttribute('data-toggle-criterion'); });
+        if (criterion) { toggleCriterionActive(criterion); }
+      });
+    });
+  }
+
+  // Reorders the in-memory list (drag source moves to the drop target's
+  // position), re-renders immediately for responsiveness, then persists
+  // the new order to the sheet.
+  function reorderBuilderCriteriaLocally(sourceId, targetId) {
+    var sourceIndex = builderCriteriaCache.findIndex(function (c) { return c.criteriaId === sourceId; });
+    var targetIndex = builderCriteriaCache.findIndex(function (c) { return c.criteriaId === targetId; });
+    if (sourceIndex === -1 || targetIndex === -1) { return; }
+
+    var moved = builderCriteriaCache.splice(sourceIndex, 1)[0];
+    builderCriteriaCache.splice(targetIndex, 0, moved);
+    renderBuilderCriteriaList();
+
+    var orderedIds = builderCriteriaCache.map(function (c) { return c.criteriaId; });
+    callServer('reorderScorecardCriteria', [builderActiveTemplateId, orderedIds], function () {
+      showStatus('Criteria order updated.', 'success');
+    });
+  }
+
+  function toggleCriterionActive(criterion) {
+    var newActive = !criterion.active;
+    callServer('updateScorecardCriterion', [criterion.criteriaId, { values: { 'Active': newActive } }], function () {
+      showStatus('Criterion updated.', 'success');
+      loadBuilderCriteria();
+    });
+  }
+
+  // Simple inline-prompt based edit (keeps this response's scope bounded -
+  // a full inline-editable row is a natural next step if this UX proves
+  // too slow in practice).
+  function openEditCriterionPrompt(criterion) {
+    var newName = window.prompt('Criterion Name', criterion.name);
+    if (newName === null) { return; }
+    var newWeightRaw = window.prompt('Weight', String(criterion.weight));
+    if (newWeightRaw === null) { return; }
+    var newScoringType = window.prompt('Scoring Type ("Weighted" or "Fatal")', criterion.scoringType || 'Weighted');
+    if (newScoringType === null) { return; }
+    var newExplanation = window.prompt('Explanation', criterion.explanation || '');
+    if (newExplanation === null) { return; }
+
+    var values = {
+      'Criterion Name': newName,
+      'Weight': newWeightRaw,
+      'Scoring Type': newScoringType,
+      'Explanation': newExplanation
+    };
+
+    callServer('updateScorecardCriterion', [criterion.criteriaId, { values: values }], function () {
+      showStatus('Criterion updated.', 'success');
+      loadBuilderCriteria();
+    });
+  }
+
+  function handleAddCriterionSubmit(event) {
+    event.preventDefault();
+
+    var name = document.getElementById('criterionFieldName').value.trim();
+    if (!name) {
+      showStatus('Criterion Name is required.', 'error');
+      return;
+    }
+
+    var values = {
+      'Criterion Name': name,
+      'Weight': document.getElementById('criterionFieldWeight').value,
+      'Scoring Type': document.getElementById('criterionFieldScoringType').value,
+      'Parameter': document.getElementById('criterionFieldParameter').value,
+      'Attribute': document.getElementById('criterionFieldAttribute').value,
+      'Explanation': document.getElementById('criterionFieldExplanation').value
+    };
+
+    var saveButton = document.getElementById('saveCriterionButton');
+    saveButton.disabled = true;
+
+    callServer('saveScorecardCriterion', { templateId: builderActiveTemplateId, values: values }, function (result) {
+      showStatus(result.message || 'Criterion added.', 'success');
+      document.getElementById('criterionForm').reset();
+      saveButton.disabled = false;
+      loadBuilderCriteria();
+      loadScorecardTemplatesSettings();
+    }, function () { saveButton.disabled = false; });
   }
 
   // ===========================================================================
