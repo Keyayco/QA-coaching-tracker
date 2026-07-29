@@ -116,6 +116,11 @@ var Tracker = (function () {
     prefix: 'TPL-',
     padLength: 4
   };
+  ID_GENERATION_CONFIG[SHEETS.scorecardCriteria] = {
+    header: FIELD_NAMES.criteriaId,
+    prefix: 'CRIT-',
+    padLength: 4
+  };
 
   // Weekly Review Detail header names have drifted from FIELD_NAMES in the
   // live sheet (e.g. "Weekly Review ID" instead of "Performance ID"). Rather
@@ -676,16 +681,46 @@ var Tracker = (function () {
     });
 
     var templateData = readSheet(SHEETS.scorecardTemplates);
+    var criteriaData = readSheet(SHEETS.scorecardCriteria);
+
+    var criteriaCountByTemplateId = {};
+    criteriaData.rows.forEach(function (row) {
+      if (!isTruthyValue(getFieldValue(row, [FIELD_NAMES.active]))) { return; }
+      var templateId = toSafeString(getFieldValue(row, [FIELD_NAMES.templateId]));
+      criteriaCountByTemplateId[templateId] = (criteriaCountByTemplateId[templateId] || 0) + 1;
+    });
+
     var templates = templateData.rows
       .map(function (row) {
         var mapped = mapScorecardTemplateRow(row);
         mapped.departmentName = departmentNameById[mapped.departmentId] || mapped.departmentId;
+        mapped.criteriaCount = criteriaCountByTemplateId[mapped.templateId] || 0;
         return mapped;
       })
       .sort(function (a, b) {
         if (a.departmentName !== b.departmentName) { return a.departmentName.localeCompare(b.departmentName); }
         return (toNumber(b.version) || 0) - (toNumber(a.version) || 0);
       });
+
+    // Version history is a display-only heuristic: templates are considered
+    // the same lineage when their Template Name and Department ID match
+    // (normalized). There is no stored parent/lineage relationship - if two
+    // unrelated templates happen to share a name in the same department,
+    // they'll appear grouped here. This is clearly a heuristic, not a
+    // guarantee, since no new lineage-tracking column was added.
+    var lineageGroups = {};
+    templates.forEach(function (template) {
+      var lineageKey = normalizeHeader(template.templateName) + '::' + normalizeHeader(template.departmentId);
+      if (!lineageGroups[lineageKey]) { lineageGroups[lineageKey] = []; }
+      lineageGroups[lineageKey].push(template);
+    });
+
+    templates.forEach(function (template) {
+      var lineageKey = normalizeHeader(template.templateName) + '::' + normalizeHeader(template.departmentId);
+      template.versionHistory = lineageGroups[lineageKey]
+        .map(function (t) { return { templateId: t.templateId, version: t.version, status: t.status }; })
+        .sort(function (a, b) { return (toNumber(b.version) || 0) - (toNumber(a.version) || 0); });
+    });
 
     return { success: true, templates: templates };
   }
@@ -761,39 +796,311 @@ var Tracker = (function () {
       throw new Error('A Template ID is required to update a scorecard template.');
     }
 
-    var templateData = readSheet(SHEETS.scorecardTemplates);
-    var values = (payload && payload.values) || {};
+    updateRowById(SHEETS.scorecardTemplates, FIELD_NAMES.templateId, requestedTemplateId, (payload && payload.values) || {});
+
+    return {
+      success: true,
+      message: 'Scorecard template ' + requestedTemplateId + ' updated successfully.'
+    };
+  }
+
+  // Generic "find a row by its ID column and overwrite it in place" used by
+  // every admin edit function (templates, criteria, and any future entity).
+  // Only headers present in `values` (by exact or normalized-header match)
+  // are changed; everything else keeps its existing cell value. The ID
+  // column itself is always preserved as idValue, never overwritten.
+  function updateRowById(sheetName, idHeader, idValue, values) {
+    var data = readSheet(sheetName);
 
     var rowIndex = -1;
     var existingRow = null;
-    for (var i = 0; i < templateData.rows.length; i += 1) {
-      if (toSafeString(getFieldValue(templateData.rows[i], [FIELD_NAMES.templateId])) === requestedTemplateId) {
-        rowIndex = templateData.rows[i]._rowNumber;
-        existingRow = templateData.rows[i];
+    for (var i = 0; i < data.rows.length; i += 1) {
+      if (toSafeString(getFieldValue(data.rows[i], [idHeader])) === idValue) {
+        rowIndex = data.rows[i]._rowNumber;
+        existingRow = data.rows[i];
         break;
       }
     }
 
     if (rowIndex === -1) {
-      throw new Error('Scorecard template ' + requestedTemplateId + ' could not be found.');
+      throw new Error('Record ' + idValue + ' could not be found in ' + sheetName + '.');
     }
 
-    var updatedRow = templateData.headers.map(function (header) {
-      if (normalizeHeader(header) === normalizeHeader(FIELD_NAMES.templateId)) {
-        return requestedTemplateId;
+    var updatedRow = data.headers.map(function (header) {
+      if (normalizeHeader(header) === normalizeHeader(idHeader)) {
+        return idValue;
       }
-      if (Object.prototype.hasOwnProperty.call(values, header) ||
-        Object.keys(values).some(function (key) { return normalizeHeader(key) === normalizeHeader(header); })) {
+      var hasValue = Object.prototype.hasOwnProperty.call(values, header) ||
+        Object.keys(values).some(function (key) { return normalizeHeader(key) === normalizeHeader(header); });
+      if (hasValue) {
         return coerceValueForSheet(header, getPayloadValue(values, header));
       }
       return serializeValue(getFieldValue(existingRow, [header]));
     });
 
-    templateData.sheet.getRange(rowIndex, 1, 1, templateData.headers.length).setValues([updatedRow]);
+    data.sheet.getRange(rowIndex, 1, 1, data.headers.length).setValues([updatedRow]);
+    return { rowNumber: rowIndex, headers: data.headers };
+  }
+
+  // ---------------------------------------------------------------------
+  // Scorecard Builder: full CRUD + reordering for Scorecard Criteria,
+  // replacing direct sheet editing. All writes are header-driven and
+  // scoped to a Template ID, matching the rest of the app's conventions.
+  // ---------------------------------------------------------------------
+
+  // Every criterion for a template (active AND inactive), for the admin
+  // Scorecard Builder - unlike getScorecardCriteria(), which only returns
+  // Active criteria for actual audit-taking.
+  function getScorecardCriteriaForBuilder(templateId) {
+    var requestedTemplateId = toSafeString(templateId);
+    if (!requestedTemplateId) {
+      return { success: false, message: 'A Template ID is required.', criteria: [] };
+    }
+
+    var criteriaData = readSheet(SHEETS.scorecardCriteria);
+    var criteria = criteriaData.rows
+      .filter(function (row) {
+        return toSafeString(getFieldValue(row, [FIELD_NAMES.templateId])) === requestedTemplateId;
+      })
+      .map(function (row) {
+        return {
+          criteriaId: toSafeString(getFieldValue(row, [FIELD_NAMES.criteriaId])),
+          templateId: requestedTemplateId,
+          displayOrder: toNumber(getFieldValue(row, [FIELD_NAMES.displayOrder])),
+          parameter: toSafeString(getFieldValue(row, [FIELD_NAMES.parameter])),
+          attribute: toSafeString(getFieldValue(row, [FIELD_NAMES.attribute])),
+          name: toSafeString(getFieldValue(row, [FIELD_NAMES.criterionName])),
+          explanation: toSafeString(getFieldValue(row, [FIELD_NAMES.explanation])),
+          weight: toNumber(getFieldValue(row, [FIELD_NAMES.criterionWeight])) || 0,
+          scoringType: toSafeString(getFieldValue(row, [FIELD_NAMES.scoringType])),
+          active: isTruthyValue(getFieldValue(row, [FIELD_NAMES.active]))
+        };
+      })
+      .sort(function (a, b) {
+        var orderA = typeof a.displayOrder === 'number' ? a.displayOrder : Number.MAX_SAFE_INTEGER;
+        var orderB = typeof b.displayOrder === 'number' ? b.displayOrder : Number.MAX_SAFE_INTEGER;
+        return orderA - orderB;
+      });
+
+    return { success: true, templateId: requestedTemplateId, criteria: criteria };
+  }
+
+  // Creates a new criterion under a template. Display Order defaults to
+  // "last" within that template if not supplied. Active defaults to true.
+  function saveScorecardCriterion(payload) {
+    var templateId = toSafeString(payload && payload.templateId);
+    if (!templateId) {
+      throw new Error('A Template ID is required to add a criterion.');
+    }
+
+    var criteriaData = readSheet(SHEETS.scorecardCriteria);
+    var values = (payload && payload.values) || {};
+
+    if (!criteriaData.headers.length) {
+      throw new Error(SHEETS.scorecardCriteria + ' must contain a header row before data can be saved.');
+    }
+
+    var criteriaId = generateNextSequentialId(criteriaData.rows, [FIELD_NAMES.criteriaId], 'CRIT-', 4);
+
+    var existingForTemplate = criteriaData.rows.filter(function (row) {
+      return toSafeString(getFieldValue(row, [FIELD_NAMES.templateId])) === templateId;
+    });
+    var maxDisplayOrder = existingForTemplate.reduce(function (max, row) {
+      var order = toNumber(getFieldValue(row, [FIELD_NAMES.displayOrder])) || 0;
+      return Math.max(max, order);
+    }, 0);
+
+    var providedDisplayOrder = getPayloadValue(values, FIELD_NAMES.displayOrder);
+    var displayOrder = isEmptyValue(providedDisplayOrder) ? (maxDisplayOrder + 1) : toNumber(providedDisplayOrder);
+
+    var row = criteriaData.headers.map(function (header) {
+      var normalized = normalizeHeader(header);
+      if (normalized === normalizeHeader(FIELD_NAMES.criteriaId)) { return criteriaId; }
+      if (normalized === normalizeHeader(FIELD_NAMES.templateId)) { return templateId; }
+      if (normalized === normalizeHeader(FIELD_NAMES.displayOrder)) { return displayOrder; }
+      if (normalized === normalizeHeader(FIELD_NAMES.active) && isEmptyValue(getPayloadValue(values, header))) { return true; }
+      return coerceValueForSheet(header, getPayloadValue(values, header));
+    });
+
+    criteriaData.sheet.appendRow(row);
 
     return {
       success: true,
-      message: 'Scorecard template ' + requestedTemplateId + ' updated successfully.'
+      message: 'Criterion saved successfully (' + criteriaId + ').',
+      criteriaId: criteriaId
+    };
+  }
+
+  // Edits a criterion in place (including toggling Active - "deletion" in
+  // the UI is really this, per the audit-protection requirement: historical
+  // audits already reference criteria by name/text in Weekly Review Detail,
+  // never by Criteria ID, so deactivating never breaks a historical record).
+  function updateScorecardCriterion(criteriaId, payload) {
+    var requestedCriteriaId = toSafeString(criteriaId);
+    if (!requestedCriteriaId) {
+      throw new Error('A Criteria ID is required to update a criterion.');
+    }
+
+    updateRowById(SHEETS.scorecardCriteria, FIELD_NAMES.criteriaId, requestedCriteriaId, (payload && payload.values) || {});
+
+    return {
+      success: true,
+      message: 'Criterion ' + requestedCriteriaId + ' updated successfully.'
+    };
+  }
+
+  // Bulk-applies a new Display Order to every criterion in orderedCriteriaIds
+  // (1-based, matching array position) for drag-and-drop reordering. Only
+  // rows whose Criteria ID appears in the array and whose Template ID
+  // matches are touched.
+  function reorderScorecardCriteria(templateId, orderedCriteriaIds) {
+    var requestedTemplateId = toSafeString(templateId);
+    var idList = Array.isArray(orderedCriteriaIds) ? orderedCriteriaIds : [];
+    if (!requestedTemplateId || !idList.length) {
+      return { success: false, message: 'A Template ID and an ordered list of Criteria IDs are required.' };
+    }
+
+    var criteriaData = readSheet(SHEETS.scorecardCriteria);
+    var displayOrderHeader = findHeader(criteriaData.headers, [FIELD_NAMES.displayOrder]);
+    if (!displayOrderHeader) {
+      throw new Error(SHEETS.scorecardCriteria + ' must have a Display Order column to support reordering.');
+    }
+    var displayOrderColumnIndex = criteriaData.headers.indexOf(displayOrderHeader) + 1;
+
+    idList.forEach(function (id, index) {
+      var normalizedId = toSafeString(id);
+      var matchingRow = criteriaData.rows.find(function (row) {
+        return toSafeString(getFieldValue(row, [FIELD_NAMES.criteriaId])) === normalizedId &&
+          toSafeString(getFieldValue(row, [FIELD_NAMES.templateId])) === requestedTemplateId;
+      });
+      if (matchingRow) {
+        criteriaData.sheet.getRange(matchingRow._rowNumber, displayOrderColumnIndex).setValue(index + 1);
+      }
+    });
+
+    return { success: true, message: 'Criteria order updated.' };
+  }
+
+  // ---------------------------------------------------------------------
+  // Template duplication & versioning
+  // ---------------------------------------------------------------------
+
+  // Shared clone routine: copies a template row (with overrides) to a new
+  // Template ID, then copies every ACTIVE criterion under it to new
+  // Criteria ID rows linked to the new template. Used by both "Duplicate"
+  // (independent clone) and "Create New Version" (same lineage).
+  function cloneTemplateWithCriteria(sourceTemplateId, overrideValues) {
+    var templateData = readSheet(SHEETS.scorecardTemplates);
+    var sourceRow = findRowByField(templateData.rows, FIELD_NAMES.templateId, sourceTemplateId);
+    if (!sourceRow) {
+      throw new Error('Scorecard template ' + sourceTemplateId + ' could not be found.');
+    }
+
+    var newTemplateId = generateNextSequentialId(templateData.rows, [FIELD_NAMES.templateId], 'TPL-', 4);
+
+    var newTemplateRow = templateData.headers.map(function (header) {
+      var normalized = normalizeHeader(header);
+      if (normalized === normalizeHeader(FIELD_NAMES.templateId)) { return newTemplateId; }
+      if (Object.prototype.hasOwnProperty.call(overrideValues, header)) {
+        return coerceValueForSheet(header, overrideValues[header]);
+      }
+      return serializeValue(getFieldValue(sourceRow, [header]));
+    });
+    templateData.sheet.appendRow(newTemplateRow);
+
+    var criteriaData = readSheet(SHEETS.scorecardCriteria);
+    var sourceCriteria = criteriaData.rows.filter(function (row) {
+      return toSafeString(getFieldValue(row, [FIELD_NAMES.templateId])) === sourceTemplateId &&
+        isTruthyValue(getFieldValue(row, [FIELD_NAMES.active]));
+    });
+
+    var nextCriteriaNumber = computeMaxSequentialNumber(criteriaData.rows, [FIELD_NAMES.criteriaId]);
+    sourceCriteria.forEach(function (sourceCriterionRow) {
+      nextCriteriaNumber += 1;
+      var newCriteriaId = 'CRIT-' + padNumber(nextCriteriaNumber, 4);
+
+      var newCriterionRow = criteriaData.headers.map(function (header) {
+        var normalized = normalizeHeader(header);
+        if (normalized === normalizeHeader(FIELD_NAMES.criteriaId)) { return newCriteriaId; }
+        if (normalized === normalizeHeader(FIELD_NAMES.templateId)) { return newTemplateId; }
+        return serializeValue(getFieldValue(sourceCriterionRow, [header]));
+      });
+      criteriaData.sheet.appendRow(newCriterionRow);
+    });
+
+    return {
+      newTemplateId: newTemplateId,
+      criteriaCopied: sourceCriteria.length
+    };
+  }
+
+  // Independent clone: new lineage entirely, starts as a Draft so it never
+  // accidentally becomes live, Version reset to 1.
+  function duplicateScorecardTemplate(templateId) {
+    var requestedTemplateId = toSafeString(templateId);
+    if (!requestedTemplateId) {
+      throw new Error('A Template ID is required to duplicate.');
+    }
+
+    var templateData = readSheet(SHEETS.scorecardTemplates);
+    var sourceRow = findRowByField(templateData.rows, FIELD_NAMES.templateId, requestedTemplateId);
+    if (!sourceRow) {
+      throw new Error('Scorecard template ' + requestedTemplateId + ' could not be found.');
+    }
+    var sourceName = toSafeString(getFieldValue(sourceRow, [FIELD_NAMES.templateName]));
+
+    var overrides = {};
+    overrides[FIELD_NAMES.templateName] = sourceName + ' (Copy)';
+    overrides[FIELD_NAMES.version] = '1';
+    overrides[FIELD_NAMES.templateStatus] = 'Draft';
+
+    var result = cloneTemplateWithCriteria(requestedTemplateId, overrides);
+
+    return {
+      success: true,
+      message: 'Duplicated as a new template (' + result.newTemplateId + ') with ' + result.criteriaCopied + ' criteria, saved as Draft.',
+      templateId: result.newTemplateId
+    };
+  }
+
+  // Same lineage, same Department/Name, Version incremented. If
+  // activateAndDeactivatePrevious is true, the new version goes live
+  // immediately and the source template is deactivated; otherwise the new
+  // version is saved as a Draft and the source template (and whatever it's
+  // currently resolving to) is left completely untouched until an
+  // administrator explicitly switches over.
+  function createNewTemplateVersion(templateId, activateAndDeactivatePrevious) {
+    var requestedTemplateId = toSafeString(templateId);
+    if (!requestedTemplateId) {
+      throw new Error('A Template ID is required to create a new version.');
+    }
+
+    var templateData = readSheet(SHEETS.scorecardTemplates);
+    var sourceRow = findRowByField(templateData.rows, FIELD_NAMES.templateId, requestedTemplateId);
+    if (!sourceRow) {
+      throw new Error('Scorecard template ' + requestedTemplateId + ' could not be found.');
+    }
+
+    var currentVersion = toNumber(getFieldValue(sourceRow, [FIELD_NAMES.version]));
+    var nextVersion = (typeof currentVersion === 'number' && !isNaN(currentVersion)) ? (currentVersion + 1) : 2;
+
+    var overrides = {};
+    overrides[FIELD_NAMES.version] = String(nextVersion);
+    overrides[FIELD_NAMES.templateStatus] = activateAndDeactivatePrevious ? 'Active' : 'Draft';
+
+    var result = cloneTemplateWithCriteria(requestedTemplateId, overrides);
+
+    if (activateAndDeactivatePrevious) {
+      var deactivateValues = {};
+      deactivateValues[FIELD_NAMES.templateStatus] = 'Inactive';
+      updateRowById(SHEETS.scorecardTemplates, FIELD_NAMES.templateId, requestedTemplateId, deactivateValues);
+    }
+
+    return {
+      success: true,
+      message: 'Created version ' + nextVersion + ' (' + result.newTemplateId + ') with ' + result.criteriaCopied + ' criteria copied' +
+        (activateAndDeactivatePrevious ? '; previous version deactivated.' : '; previous version left active until you switch over.'),
+      templateId: result.newTemplateId
     };
   }
 
@@ -2232,6 +2539,12 @@ var Tracker = (function () {
     saveScorecardTemplate: saveScorecardTemplate,
     updateScorecardTemplate: updateScorecardTemplate,
     getSuggestedAuditScore: getSuggestedAuditScore,
+    getScorecardCriteriaForBuilder: getScorecardCriteriaForBuilder,
+    saveScorecardCriterion: saveScorecardCriterion,
+    updateScorecardCriterion: updateScorecardCriterion,
+    reorderScorecardCriteria: reorderScorecardCriteria,
+    duplicateScorecardTemplate: duplicateScorecardTemplate,
+    createNewTemplateVersion: createNewTemplateVersion,
     saveWeeklyReview: saveWeeklyReview
   };
 })();
