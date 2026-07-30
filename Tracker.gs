@@ -1193,6 +1193,319 @@ var Tracker = (function () {
     };
   }
 
+  // =========================================================================
+  // ANALYTICS MODULE
+  // Kept deliberately separate from the scoring engine and from Search's own
+  // filtering logic above/below: this module's only job is to read every
+  // relevant sheet EXACTLY ONCE per request and produce one flat, denormalized
+  // array of audit-level records. Every future analytics consumer (Root
+  // Cause Analytics, Trend Analysis, Team Leader Dashboard, Department
+  // Analytics, Executive Dashboard, Week Explorer) should filter/group THIS
+  // SAME array rather than re-reading sheets or re-deriving joins - "aggregate
+  // once, reuse everywhere." This is also the shape future AI features would
+  // consume (per-audit records with resolved template/criticality context
+  // already attached), without needing their own separate data plumbing.
+  // =========================================================================
+
+  // Builds the flat audit-level dataset: one entry per Weekly Review Detail
+  // row, joined with its parent Performance Log record, the agent, the
+  // department, and (heuristically - see resolveTemplateForAudit) the
+  // Scorecard Template that most likely governed it. Every sheet involved is
+  // read exactly once, regardless of how many audits/departments exist.
+  function buildAuditAnalyticsDataset() {
+    var departmentData = readSheet(SHEETS.departments);
+    var agentData = readSheet(SHEETS.agents);
+    var performanceData = readSheet(SHEETS.performanceLog);
+    var templateData = readSheet(SHEETS.scorecardTemplates);
+    var criteriaData = readSheet(SHEETS.scorecardCriteria);
+    var detailData = readSheet(SHEETS.weeklyReviewDetail);
+
+    var departmentNameById = {};
+    departmentData.rows.forEach(function (row) {
+      departmentNameById[toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId]))] =
+        toSafeString(getFieldValue(row, [FIELD_NAMES.departmentName]));
+    });
+
+    var agentInfoById = {};
+    agentData.rows.forEach(function (row) {
+      var agentId = toSafeString(getFieldValue(row, [FIELD_NAMES.agentId]));
+      var departmentId = toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId]));
+      agentInfoById[agentId] = {
+        agentId: agentId,
+        name: toSafeString(getFieldValue(row, [FIELD_NAMES.name])),
+        departmentId: departmentId,
+        departmentName: departmentNameById[departmentId] || departmentId,
+        teamLeader: toSafeString(getFieldValue(row, [FIELD_NAMES.teamLeader]))
+      };
+    });
+
+    var performanceById = {};
+    performanceData.rows.forEach(function (row) {
+      var performanceId = toSafeString(getFieldValue(row, [FIELD_NAMES.performanceId]));
+      performanceById[performanceId] = {
+        agentId: toSafeString(getFieldValue(row, [FIELD_NAMES.agentId])),
+        weekEnding: serializeValue(getFieldValue(row, [FIELD_NAMES.weekEnding])),
+        qaStream: toSafeString(getFieldValue(row, [FIELD_NAMES.qaStream]))
+      };
+    });
+
+    var templatesByDepartment = {};
+    templateData.rows.forEach(function (row) {
+      var departmentId = toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId]));
+      if (!templatesByDepartment[departmentId]) { templatesByDepartment[departmentId] = []; }
+      templatesByDepartment[departmentId].push({
+        templateId: toSafeString(getFieldValue(row, [FIELD_NAMES.templateId])),
+        templateName: toSafeString(getFieldValue(row, [FIELD_NAMES.templateName])),
+        version: toSafeString(getFieldValue(row, [FIELD_NAMES.version])),
+        effectiveFrom: parseDate(getFieldValue(row, [FIELD_NAMES.effectiveFrom])),
+        effectiveTo: parseDate(getFieldValue(row, [FIELD_NAMES.effectiveTo]))
+      });
+    });
+
+    var criteriaByTemplateId = {};
+    criteriaData.rows.forEach(function (row) {
+      var templateId = toSafeString(getFieldValue(row, [FIELD_NAMES.templateId]));
+      if (!criteriaByTemplateId[templateId]) { criteriaByTemplateId[templateId] = []; }
+      var criterionScoringType = toSafeString(getFieldValue(row, [FIELD_NAMES.scoringType]));
+      criteriaByTemplateId[templateId].push({
+        name: toSafeString(getFieldValue(row, [FIELD_NAMES.criterionName])),
+        parameter: toSafeString(getFieldValue(row, [FIELD_NAMES.parameter])),
+        attribute: toSafeString(getFieldValue(row, [FIELD_NAMES.attribute])),
+        isCritical: normalizeHeader(criterionScoringType) === CRITERION_SCORING_TYPE_FATAL
+      });
+    });
+
+    var records = detailData.rows.map(function (row) {
+      var performanceId = toSafeString(getFieldValue(row, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.performanceId));
+      var performanceInfo = performanceById[performanceId] || {};
+      var agentInfo = agentInfoById[performanceInfo.agentId] || {};
+
+      var auditDate = parseDate(getFieldValue(row, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.auditDate));
+      var resolvedTemplate = resolveTemplateForAudit(agentInfo.departmentId, auditDate, templatesByDepartment);
+      var failedCriteriaNames = parseFailedCriteria(getFieldValue(row, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.failedCriteria));
+      var templateCriteria = resolvedTemplate ? (criteriaByTemplateId[resolvedTemplate.templateId] || []) : [];
+
+      var failedCriteria = failedCriteriaNames.map(function (criterionName) {
+        var matched = templateCriteria.find(function (c) { return normalizeHeader(c.name) === normalizeHeader(criterionName); });
+        return {
+          name: criterionName,
+          parameter: matched ? matched.parameter : '',
+          attribute: matched ? matched.attribute : '',
+          isCritical: matched ? matched.isCritical : null
+        };
+      });
+
+      return {
+        detailId: toSafeString(getFieldValue(row, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.detailId)),
+        performanceId: performanceId,
+        agentId: agentInfo.agentId || performanceInfo.agentId || '',
+        agentName: agentInfo.name || '',
+        departmentId: agentInfo.departmentId || '',
+        departmentName: agentInfo.departmentName || '',
+        teamLeader: agentInfo.teamLeader || '',
+        qaStream: performanceInfo.qaStream || '',
+        weekEnding: performanceInfo.weekEnding || '',
+        interactionId: toSafeString(getFieldValue(row, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.interactionId)),
+        auditDate: auditDate ? formatDate(auditDate) : '',
+        auditDateObj: auditDate,
+        score: toNumber(getFieldValue(row, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.score)),
+        comments: toSafeString(getFieldValue(row, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.comments)),
+        failedCriteria: failedCriteria,
+        templateId: resolvedTemplate ? resolvedTemplate.templateId : '',
+        templateName: resolvedTemplate ? resolvedTemplate.templateName : '',
+        templateVersion: resolvedTemplate ? resolvedTemplate.version : '',
+        templateResolved: !!resolvedTemplate,
+        weekKey: auditDate ? getIsoWeekKey(auditDate) : '',
+        monthKey: auditDate ? getMonthPeriodKey(auditDate) : '',
+        quarterKey: auditDate ? getQuarterPeriodKey(auditDate) : '',
+        yearKey: auditDate ? getYearPeriodKey(auditDate) : ''
+      };
+    });
+
+    return records;
+  }
+
+  // HEURISTIC: Weekly Review Detail never stored which Template governed an
+  // audit (no schema change was authorized to add that column), so this
+  // resolves it after the fact via Department + Effective Date range. When
+  // more than one template is active for the department on that date (e.g.
+  // mid-version-transition), the highest version wins - documented tie-break,
+  // not a guarantee. Returns null (search/analytics show "unresolved") if no
+  // candidate matches at all.
+  function resolveTemplateForAudit(departmentId, auditDate, templatesByDepartment) {
+    if (!departmentId || !auditDate) { return null; }
+    var candidates = (templatesByDepartment[departmentId] || []).filter(function (template) {
+      if (template.effectiveFrom && auditDate.getTime() < template.effectiveFrom.getTime()) { return false; }
+      if (template.effectiveTo && auditDate.getTime() > template.effectiveTo.getTime()) { return false; }
+      return true;
+    });
+
+    if (!candidates.length) { return null; }
+
+    candidates.sort(function (a, b) { return (toNumber(b.version) || 0) - (toNumber(a.version) || 0); });
+    return candidates[0];
+  }
+
+  // Universal Search: every filter is optional and AND-combined - providing
+  // more filters only ever narrows the result set further. Built on top of
+  // buildAuditAnalyticsDataset(), so this never re-reads a sheet itself.
+  //
+  // filters: {
+  //   week, month, quarter, year,          // exact match against precomputed period keys
+  //   dateFrom, dateTo,                     // ISO date strings, inclusive
+  //   agentId, departmentId, teamLeader,
+  //   templateId, version,
+  //   parameter, attribute, criterion,      // criterion = a specific failed criterion name
+  //   criticality,                          // 'critical' | 'general' | '' (any)
+  //   scoreMin, scoreMax,
+  //   auditId                                // matches Detail ID OR Interaction ID
+  // }
+  function searchAudits(filters) {
+    var f = filters || {};
+    var dataset = buildAuditAnalyticsDataset();
+
+    var dateFrom = f.dateFrom ? parseDate(f.dateFrom) : null;
+    var dateTo = f.dateTo ? parseDate(f.dateTo) : null;
+    var normalizedAuditId = toSafeString(f.auditId);
+    var normalizedTeamLeader = normalizeHeader(f.teamLeader);
+    var normalizedParameter = normalizeHeader(f.parameter);
+    var normalizedAttribute = normalizeHeader(f.attribute);
+    var normalizedCriterion = normalizeHeader(f.criterion);
+    var normalizedCriticality = toSafeString(f.criticality).toLowerCase();
+
+    var results = dataset.filter(function (record) {
+      if (f.week) {
+        var weekFilterDate = parseDate(f.week);
+        if (!weekFilterDate || record.weekKey !== getIsoWeekKey(weekFilterDate)) { return false; }
+      }
+      if (f.month && record.monthKey !== f.month) { return false; }
+      if (f.quarter && record.quarterKey !== f.quarter) { return false; }
+      if (f.year && record.yearKey !== f.year) { return false; }
+
+      if (dateFrom || dateTo) {
+        if (!record.auditDateObj) { return false; }
+        if (dateFrom && record.auditDateObj.getTime() < dateFrom.getTime()) { return false; }
+        if (dateTo && record.auditDateObj.getTime() > dateTo.getTime()) { return false; }
+      }
+
+      if (f.agentId && record.agentId !== toSafeString(f.agentId)) { return false; }
+      if (f.departmentId && record.departmentId !== toSafeString(f.departmentId)) { return false; }
+      if (normalizedTeamLeader && normalizeHeader(record.teamLeader) !== normalizedTeamLeader) { return false; }
+      if (f.templateId && record.templateId !== toSafeString(f.templateId)) { return false; }
+      if (f.version && toSafeString(record.templateVersion) !== toSafeString(f.version)) { return false; }
+
+      if (typeof f.scoreMin === 'number' && (typeof record.score !== 'number' || record.score < f.scoreMin)) { return false; }
+      if (typeof f.scoreMax === 'number' && (typeof record.score !== 'number' || record.score > f.scoreMax)) { return false; }
+
+      if (normalizedAuditId &&
+        normalizeHeader(record.detailId) !== normalizeHeader(normalizedAuditId) &&
+        normalizeHeader(record.interactionId) !== normalizeHeader(normalizedAuditId)) {
+        return false;
+      }
+
+      if (normalizedParameter && !record.failedCriteria.some(function (c) { return normalizeHeader(c.parameter) === normalizedParameter; })) {
+        return false;
+      }
+      if (normalizedAttribute && !record.failedCriteria.some(function (c) { return normalizeHeader(c.attribute) === normalizedAttribute; })) {
+        return false;
+      }
+      if (normalizedCriterion && !record.failedCriteria.some(function (c) { return normalizeHeader(c.name) === normalizedCriterion; })) {
+        return false;
+      }
+      if (normalizedCriticality === 'critical' && !record.failedCriteria.some(function (c) { return c.isCritical === true; })) {
+        return false;
+      }
+      if (normalizedCriticality === 'general' && !record.failedCriteria.some(function (c) { return c.isCritical === false; })) {
+        return false;
+      }
+
+      return true;
+    });
+
+    results.sort(function (a, b) {
+      return (b.auditDateObj ? b.auditDateObj.getTime() : 0) - (a.auditDateObj ? a.auditDateObj.getTime() : 0);
+    });
+
+    return {
+      success: true,
+      resultCount: results.length,
+      records: results
+    };
+  }
+
+  // Distinct option lists for populating Search's filter dropdowns. Reads
+  // the reference sheets directly (Departments, Agents, Scorecard Templates,
+  // Scorecard Criteria) rather than the full joined audit dataset, since
+  // these are cheap lookups that don't need the Weekly Review Detail join.
+  function getSearchFilterOptions() {
+    var departmentData = readSheet(SHEETS.departments);
+    var agentData = readSheet(SHEETS.agents);
+    var templateData = readSheet(SHEETS.scorecardTemplates);
+    var criteriaData = readSheet(SHEETS.scorecardCriteria);
+
+    var departments = departmentData.rows.map(function (row) {
+      return {
+        departmentId: toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId])),
+        departmentName: toSafeString(getFieldValue(row, [FIELD_NAMES.departmentName]))
+      };
+    }).filter(function (d) { return d.departmentId; });
+
+    var agents = agentData.rows.map(function (row) {
+      return {
+        agentId: toSafeString(getFieldValue(row, [FIELD_NAMES.agentId])),
+        name: toSafeString(getFieldValue(row, [FIELD_NAMES.name])),
+        departmentId: toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId]))
+      };
+    }).filter(function (a) { return a.agentId; });
+
+    var teamLeaders = distinctNonEmpty(agentData.rows.map(function (row) {
+      return toSafeString(getFieldValue(row, [FIELD_NAMES.teamLeader]));
+    }));
+
+    var templates = templateData.rows.map(function (row) {
+      return {
+        templateId: toSafeString(getFieldValue(row, [FIELD_NAMES.templateId])),
+        templateName: toSafeString(getFieldValue(row, [FIELD_NAMES.templateName])),
+        version: toSafeString(getFieldValue(row, [FIELD_NAMES.version]))
+      };
+    }).filter(function (t) { return t.templateId; });
+
+    var parameters = distinctNonEmpty(criteriaData.rows.map(function (row) {
+      return toSafeString(getFieldValue(row, [FIELD_NAMES.parameter]));
+    }));
+    var attributes = distinctNonEmpty(criteriaData.rows.map(function (row) {
+      return toSafeString(getFieldValue(row, [FIELD_NAMES.attribute]));
+    }));
+    var criteria = distinctNonEmpty(criteriaData.rows.map(function (row) {
+      return toSafeString(getFieldValue(row, [FIELD_NAMES.criterionName]));
+    }));
+
+    return {
+      success: true,
+      departments: departments,
+      agents: agents,
+      teamLeaders: teamLeaders,
+      templates: templates,
+      parameters: parameters,
+      attributes: attributes,
+      criteria: criteria
+    };
+  }
+
+  function distinctNonEmpty(values) {
+    var seen = {};
+    var result = [];
+    values.forEach(function (value) {
+      if (!value) { return; }
+      var key = normalizeHeader(value);
+      if (!seen[key]) {
+        seen[key] = true;
+        result.push(value);
+      }
+    });
+    return result.sort(function (a, b) { return a.localeCompare(b); });
+  }
+
   // Creates one Weekly Review (a Performance Log record) from 3-5 individual
   // audits, each stored as its own Weekly Review Detail row linked back to
   // the generated Performance ID. Statistics and the primary/secondary
@@ -1993,6 +2306,19 @@ var Tracker = (function () {
     return formatDate(date);
   }
 
+  // Calendar-week key for audit-level Search ("Week 30"), distinct from
+  // getWeekPeriodKey() above (which keys by exact date, correct for the
+  // Performance Timeline where each row already IS one week's snapshot, but
+  // wrong here - multiple audits sharing a calendar week but not an exact
+  // date need to match the same "week"). Simplified (day-of-year / 7), not
+  // strict ISO-8601 week numbering, but consistent everywhere it's used.
+  function getIsoWeekKey(date) {
+    var startOfYear = new Date(date.getFullYear(), 0, 1);
+    var dayOfYear = Math.floor((date.getTime() - startOfYear.getTime()) / 86400000) + 1;
+    var weekNumber = Math.ceil(dayOfYear / 7);
+    return date.getFullYear() + '-W' + padNumber(weekNumber, 2);
+  }
+
   function getMonthPeriodKey(date) {
     return date.getFullYear() + '-' + padNumber(date.getMonth() + 1, 2);
   }
@@ -2545,6 +2871,8 @@ var Tracker = (function () {
     reorderScorecardCriteria: reorderScorecardCriteria,
     duplicateScorecardTemplate: duplicateScorecardTemplate,
     createNewTemplateVersion: createNewTemplateVersion,
+    searchAudits: searchAudits,
+    getSearchFilterOptions: getSearchFilterOptions,
     saveWeeklyReview: saveWeeklyReview
   };
 })();

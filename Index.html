@@ -486,6 +486,9 @@
       <button class="nav-item active" data-page="dashboard">
         <span class="nav-icon">&#9673;</span> Dashboard
       </button>
+      <button class="nav-item" data-page="search">
+        <span class="nav-icon">&#128269;</span> Search
+      </button>
       <button class="nav-item" data-page="weekly-review">
         <span class="nav-icon">&#9998;</span> Weekly Review
       </button>
@@ -521,6 +524,51 @@
         </div>
       </div>
       <div id="dashboardContent"></div>
+    </section>
+
+    <!-- SEARCH PAGE -->
+    <section class="page-view" data-page-view="search" id="page-search">
+      <div class="page-header">
+        <div>
+          <h1>Search</h1>
+          <p>Combine any filters below - every audit that matches all of them appears instantly.</p>
+        </div>
+      </div>
+
+      <div class="card review-panel" style="margin-bottom: var(--space-5);">
+        <div class="form-grid">
+          <div class="field-group"><label>Week (pick any date within it)</label><input type="date" id="searchWeek"></div>
+          <div class="field-group"><label>Month</label><input type="month" id="searchMonth"></div>
+          <div class="field-group"><label>Quarter</label><input type="text" id="searchQuarter" placeholder="e.g. 2026 Q3"></div>
+          <div class="field-group"><label>Year</label><input type="number" id="searchYear" placeholder="e.g. 2026" min="2000" max="2100"></div>
+          <div class="field-group"><label>Date From</label><input type="date" id="searchDateFrom"></div>
+          <div class="field-group"><label>Date To</label><input type="date" id="searchDateTo"></div>
+          <div class="field-group"><label>Department</label><select id="searchDepartment"><option value="">Any</option></select></div>
+          <div class="field-group"><label>Agent</label><select id="searchAgent"><option value="">Any</option></select></div>
+          <div class="field-group"><label>Team Leader</label><select id="searchTeamLeader"><option value="">Any</option></select></div>
+          <div class="field-group"><label>Scorecard Template</label><select id="searchTemplate"><option value="">Any</option></select></div>
+          <div class="field-group"><label>Version</label><input type="text" id="searchVersion" placeholder="e.g. 2"></div>
+          <div class="field-group"><label>Parameter</label><select id="searchParameter"><option value="">Any</option></select></div>
+          <div class="field-group"><label>Attribute</label><select id="searchAttribute"><option value="">Any</option></select></div>
+          <div class="field-group"><label>Failed Criterion</label><select id="searchCriterion"><option value="">Any</option></select></div>
+          <div class="field-group">
+            <label>Critical vs General</label>
+            <select id="searchCriticality"><option value="">Any</option><option value="critical">Critical only</option><option value="general">General only</option></select>
+          </div>
+          <div class="field-group"><label>Score Min</label><input type="number" id="searchScoreMin" min="0" max="100"></div>
+          <div class="field-group"><label>Score Max</label><input type="number" id="searchScoreMax" min="0" max="100"></div>
+          <div class="field-group"><label>Audit ID (Detail ID or Interaction ID)</label><input type="text" id="searchAuditId"></div>
+        </div>
+        <div class="review-actions">
+          <button class="btn btn-primary" id="runSearchButton" type="button">Search</button>
+          <button class="btn btn-secondary" id="clearSearchButton" type="button">Clear</button>
+          <button class="btn btn-secondary" id="saveSearchButton" type="button">Save This Search</button>
+        </div>
+        <div id="savedFiltersRow" style="margin-top: var(--space-4);"></div>
+      </div>
+
+      <div id="searchResultsSummary" class="drilldown-summary" style="display:none;"></div>
+      <div id="searchResultsShell"></div>
     </section>
 
     <!-- WEEKLY REVIEW PAGE -->
@@ -860,6 +908,17 @@
   </div>
 </div>
 
+<!-- Audit detail modal (Search result drill-down) -->
+<div id="auditDetailModalBackdrop" class="modal-backdrop">
+  <div class="modal" style="width: min(600px, 100%);">
+    <div class="modal-header">
+      <h2>Audit Detail</h2>
+      <button class="btn btn-secondary btn-sm" id="closeAuditDetailModalButton" type="button">Close</button>
+    </div>
+    <div id="auditDetailModalBody"></div>
+  </div>
+</div>
+
 <script>
   // ===========================================================================
   // Application state
@@ -880,6 +939,9 @@
     criteriaByTemplate: {},      // templateId -> criteria[] cache
     selectedTemplateId: '',
     allTemplatesCache: [],
+    searchFilterOptionsLoaded: false,
+    searchFilterOptions: null,
+    searchResultsCache: [],
     activeFormType: '',
     modalContext: null           // { agentId, name } when Add is launched with a known agent
   };
@@ -943,6 +1005,14 @@
     });
     document.getElementById('criterionForm').addEventListener('submit', handleAddCriterionSubmit);
 
+    document.getElementById('runSearchButton').addEventListener('click', runSearch);
+    document.getElementById('clearSearchButton').addEventListener('click', clearSearchFilters);
+    document.getElementById('saveSearchButton').addEventListener('click', saveCurrentSearch);
+    document.getElementById('closeAuditDetailModalButton').addEventListener('click', closeAuditDetailModal);
+    document.getElementById('auditDetailModalBackdrop').addEventListener('click', function (event) {
+      if (event.target.id === 'auditDetailModalBackdrop') { closeAuditDetailModal(); }
+    });
+
     document.getElementById('coachingSearchInput').addEventListener('input', function (e) {
       renderLogTable('coaching', e.target.value);
     });
@@ -980,6 +1050,7 @@
     if (pageName === 'performance') { loadLog('performance'); }
     if (pageName === 'disputes') { loadLog('dispute'); }
     if (pageName === 'settings') { loadScorecardTemplatesSettings(); }
+    if (pageName === 'search' && !appState.searchFilterOptionsLoaded) { loadSearchFilterOptions(); }
   }
 
   // ===========================================================================
@@ -2504,6 +2575,274 @@
       loadBuilderCriteria();
       loadScorecardTemplatesSettings();
     }, function () { saveButton.disabled = false; });
+  }
+
+  // ===========================================================================
+  // SEARCH MODULE
+  // Kept separate from Dashboards/Reports/Settings on purpose - this is the
+  // shared query engine every future analytics page (Root Cause, Trends,
+  // Team Leader Dashboard, Week Explorer, etc.) is meant to be built on top
+  // of, per the "aggregate once, reuse everywhere" architecture.
+  // ===========================================================================
+  var SAVED_FILTERS_STORAGE_KEY = 'qaCommandCentre.savedSearchFilters';
+
+  function loadSearchFilterOptions() {
+    callServer('getSearchFilterOptions', undefined, function (result) {
+      appState.searchFilterOptions = result;
+      appState.searchFilterOptionsLoaded = true;
+      populateSearchFilterSelects(result);
+      renderSavedFilters();
+    });
+  }
+
+  function populateSearchFilterSelects(options) {
+    fillSelect('searchDepartment', options.departments, function (d) { return d.departmentId; }, function (d) { return d.departmentName; });
+    fillSelect('searchAgent', options.agents, function (a) { return a.agentId; }, function (a) { return a.name + ' (' + a.agentId + ')'; });
+    fillSelect('searchTeamLeader', options.teamLeaders, function (t) { return t; }, function (t) { return t; });
+    fillSelect('searchTemplate', options.templates, function (t) { return t.templateId; }, function (t) { return t.templateName + ' (v' + t.version + ')'; });
+    fillSelect('searchParameter', options.parameters, function (p) { return p; }, function (p) { return p; });
+    fillSelect('searchAttribute', options.attributes, function (a) { return a; }, function (a) { return a; });
+    fillSelect('searchCriterion', options.criteria, function (c) { return c; }, function (c) { return c; });
+  }
+
+  function fillSelect(selectId, items, valueFn, labelFn) {
+    var select = document.getElementById(selectId);
+    var currentValue = select.value;
+    select.innerHTML = '<option value="">Any</option>' +
+      items.map(function (item) {
+        return '<option value="' + escapeAttribute(valueFn(item)) + '">' + escapeHtml(labelFn(item)) + '</option>';
+      }).join('');
+    select.value = currentValue;
+  }
+
+  function collectSearchFilters() {
+    var filters = {};
+    var week = document.getElementById('searchWeek').value;
+    if (week) { filters.week = week; }
+    var month = document.getElementById('searchMonth').value;
+    if (month) { filters.month = month; }
+    var quarter = document.getElementById('searchQuarter').value.trim();
+    if (quarter) { filters.quarter = quarter; }
+    var year = document.getElementById('searchYear').value;
+    if (year) { filters.year = year; }
+    var dateFrom = document.getElementById('searchDateFrom').value;
+    if (dateFrom) { filters.dateFrom = dateFrom; }
+    var dateTo = document.getElementById('searchDateTo').value;
+    if (dateTo) { filters.dateTo = dateTo; }
+    var departmentId = document.getElementById('searchDepartment').value;
+    if (departmentId) { filters.departmentId = departmentId; }
+    var agentId = document.getElementById('searchAgent').value;
+    if (agentId) { filters.agentId = agentId; }
+    var teamLeader = document.getElementById('searchTeamLeader').value;
+    if (teamLeader) { filters.teamLeader = teamLeader; }
+    var templateId = document.getElementById('searchTemplate').value;
+    if (templateId) { filters.templateId = templateId; }
+    var version = document.getElementById('searchVersion').value;
+    if (version) { filters.version = version; }
+    var parameter = document.getElementById('searchParameter').value;
+    if (parameter) { filters.parameter = parameter; }
+    var attribute = document.getElementById('searchAttribute').value;
+    if (attribute) { filters.attribute = attribute; }
+    var criterion = document.getElementById('searchCriterion').value;
+    if (criterion) { filters.criterion = criterion; }
+    var criticality = document.getElementById('searchCriticality').value;
+    if (criticality) { filters.criticality = criticality; }
+    var scoreMin = document.getElementById('searchScoreMin').value;
+    if (scoreMin !== '') { filters.scoreMin = Number(scoreMin); }
+    var scoreMax = document.getElementById('searchScoreMax').value;
+    if (scoreMax !== '') { filters.scoreMax = Number(scoreMax); }
+    var auditId = document.getElementById('searchAuditId').value.trim();
+    if (auditId) { filters.auditId = auditId; }
+    return filters;
+  }
+
+  function applySearchFilters(filters) {
+    document.getElementById('searchWeek').value = filters.week || '';
+    document.getElementById('searchMonth').value = filters.month || '';
+    document.getElementById('searchQuarter').value = filters.quarter || '';
+    document.getElementById('searchYear').value = filters.year || '';
+    document.getElementById('searchDateFrom').value = filters.dateFrom || '';
+    document.getElementById('searchDateTo').value = filters.dateTo || '';
+    document.getElementById('searchDepartment').value = filters.departmentId || '';
+    document.getElementById('searchAgent').value = filters.agentId || '';
+    document.getElementById('searchTeamLeader').value = filters.teamLeader || '';
+    document.getElementById('searchTemplate').value = filters.templateId || '';
+    document.getElementById('searchVersion').value = filters.version || '';
+    document.getElementById('searchParameter').value = filters.parameter || '';
+    document.getElementById('searchAttribute').value = filters.attribute || '';
+    document.getElementById('searchCriterion').value = filters.criterion || '';
+    document.getElementById('searchCriticality').value = filters.criticality || '';
+    document.getElementById('searchScoreMin').value = filters.scoreMin !== undefined ? filters.scoreMin : '';
+    document.getElementById('searchScoreMax').value = filters.scoreMax !== undefined ? filters.scoreMax : '';
+    document.getElementById('searchAuditId').value = filters.auditId || '';
+  }
+
+  function clearSearchFilters() {
+    applySearchFilters({});
+    document.getElementById('searchResultsSummary').style.display = 'none';
+    document.getElementById('searchResultsShell').innerHTML = '';
+  }
+
+  function runSearch() {
+    var filters = collectSearchFilters();
+    showStatus('Searching...', 'info');
+    document.getElementById('searchResultsShell').innerHTML = '<div class="empty-state">Searching...</div>';
+
+    callServer('searchAudits', filters, function (result) {
+      appState.searchResultsCache = result.records || [];
+      renderSearchResults(result);
+      showStatus(result.resultCount + ' matching audit(s) found.', 'success');
+    });
+  }
+
+  function renderSearchResults(result) {
+    var summary = document.getElementById('searchResultsSummary');
+    var shell = document.getElementById('searchResultsShell');
+    var records = result.records || [];
+
+    summary.style.display = 'block';
+    summary.textContent = result.resultCount + ' matching audit(s).';
+
+    if (!records.length) {
+      shell.innerHTML = '<div class="table-shell"><div class="empty-state">No audits match these filters.</div></div>';
+      return;
+    }
+
+    var rows = records.map(function (record, index) {
+      return (
+        '<tr data-search-result-index="' + index + '" style="cursor:pointer;">' +
+          '<td>' + escapeHtml(record.agentName) + '</td>' +
+          '<td>' + escapeHtml(record.departmentName) + '</td>' +
+          '<td>' + escapeHtml(record.weekEnding) + '</td>' +
+          '<td>' + escapeHtml(record.interactionId) + '</td>' +
+          '<td>' + escapeHtml(record.auditDate) + '</td>' +
+          '<td>' + escapeHtml(toDisplayString(record.score)) + '</td>' +
+          '<td>' + escapeHtml((record.failedCriteria || []).map(function (c) { return c.name; }).join(', ')) + '</td>' +
+          '<td>' + escapeHtml(record.templateResolved ? (record.templateName + ' v' + record.templateVersion) : 'Unresolved') + '</td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    shell.innerHTML =
+      '<div class="table-shell"><table><thead><tr>' +
+        '<th>Agent</th><th>Department</th><th>Week Ending</th><th>Interaction ID</th><th>Audit Date</th><th>Score</th><th>Failed Criteria</th><th>Template</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-search-result-index]')).forEach(function (row) {
+      row.addEventListener('click', function () {
+        openAuditDetail(appState.searchResultsCache[Number(row.getAttribute('data-search-result-index'))]);
+      });
+    });
+  }
+
+  function openAuditDetail(record) {
+    if (!record) { return; }
+
+    var failedCriteriaHtml = (record.failedCriteria || []).length
+      ? '<ul style="margin:0; padding-left: 18px;">' + record.failedCriteria.map(function (c) {
+          return '<li>' + escapeHtml(c.name) +
+            (c.isCritical === true ? ' <span class="badge danger">Critical</span>' : (c.isCritical === false ? ' <span class="badge neutral">General</span>' : '')) +
+            (c.parameter ? ' \u2014 ' + escapeHtml(c.parameter) : '') +
+            (c.attribute ? ' / ' + escapeHtml(c.attribute) : '') +
+          '</li>';
+        }).join('') + '</ul>'
+      : '<span style="color: var(--text-faint);">None</span>';
+
+    document.getElementById('auditDetailModalBody').innerHTML =
+      '<div class="profile-meta-grid" style="margin-bottom: var(--space-4);">' +
+        metaHtmlItem('Agent', record.agentName) +
+        metaHtmlItem('Department', record.departmentName) +
+        metaHtmlItem('Team Leader', record.teamLeader) +
+        metaHtmlItem('Week Ending', record.weekEnding) +
+        metaHtmlItem('Interaction ID', record.interactionId) +
+        metaHtmlItem('Audit Date', record.auditDate) +
+        metaHtmlItem('Score', toDisplayString(record.score)) +
+        metaHtmlItem('Template', record.templateResolved ? (record.templateName + ' v' + record.templateVersion) : 'Unresolved (see note below)') +
+      '</div>' +
+      '<div style="margin-bottom: var(--space-4);"><strong style="font-size:12.5px;">Failed Criteria</strong><div style="margin-top:6px;">' + failedCriteriaHtml + '</div></div>' +
+      '<div><strong style="font-size:12.5px;">Comments</strong><p style="font-size:13px; color: var(--text-muted); margin: 6px 0 0;">' + escapeHtml(record.comments || 'None') + '</p></div>' +
+      (!record.templateResolved ? '<p style="font-size:11.5px; color: var(--text-faint); margin-top: var(--space-4);">This audit\u2019s Scorecard Template could not be determined from department + effective dates, so Parameter/Attribute/Critical classification may be incomplete.</p>' : '');
+
+    document.getElementById('auditDetailModalBackdrop').classList.add('open');
+  }
+
+  function metaHtmlItem(label, value) {
+    if (!value) { return ''; }
+    return '<div class="meta-item"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></div>';
+  }
+
+  function closeAuditDetailModal() {
+    document.getElementById('auditDetailModalBackdrop').classList.remove('open');
+  }
+
+  // Saved Filters: stored in the browser's localStorage, per-user, per-device
+  // - this is a real Apps Script webapp deployment (not a sandboxed preview),
+  // so localStorage is available and appropriate here, exactly as requested
+  // ("store locally for now").
+  function loadSavedFilters() {
+    try {
+      var raw = window.localStorage.getItem(SAVED_FILTERS_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function persistSavedFilters(savedFilters) {
+    try {
+      window.localStorage.setItem(SAVED_FILTERS_STORAGE_KEY, JSON.stringify(savedFilters));
+    } catch (error) {
+      showStatus('Could not save filter locally in this browser.', 'error');
+    }
+  }
+
+  function saveCurrentSearch() {
+    var name = window.prompt('Name this saved search (e.g. "My Team", "Critical Failures"):');
+    if (!name) { return; }
+
+    var savedFilters = loadSavedFilters();
+    savedFilters.push({ name: name, filters: collectSearchFilters() });
+    persistSavedFilters(savedFilters);
+    renderSavedFilters();
+    showStatus('Saved search "' + name + '".', 'success');
+  }
+
+  function renderSavedFilters() {
+    var container = document.getElementById('savedFiltersRow');
+    var savedFilters = loadSavedFilters();
+
+    if (!savedFilters.length) {
+      container.innerHTML = '<span style="font-size:12px; color: var(--text-faint);">No saved searches yet.</span>';
+      return;
+    }
+
+    container.innerHTML = savedFilters.map(function (saved, index) {
+      return (
+        '<span class="badge neutral" style="cursor:pointer; margin-right:6px; padding:6px 10px;" data-apply-saved="' + index + '">' +
+          escapeHtml(saved.name) +
+        '</span>' +
+        '<button type="button" class="btn btn-secondary btn-sm" style="padding:2px 8px; margin-right:10px;" data-delete-saved="' + index + '">&times;</button>'
+      );
+    }).join('');
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-apply-saved]')).forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        var saved = loadSavedFilters()[Number(chip.getAttribute('data-apply-saved'))];
+        if (saved) {
+          applySearchFilters(saved.filters);
+          runSearch();
+        }
+      });
+    });
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-delete-saved]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        var savedFilters = loadSavedFilters();
+        savedFilters.splice(Number(button.getAttribute('data-delete-saved')), 1);
+        persistSavedFilters(savedFilters);
+        renderSavedFilters();
+      });
+    });
   }
 
   // ===========================================================================

@@ -148,6 +148,18 @@ function createNewTemplateVersion(templateId, activateAndDeactivatePrevious) {
   });
 }
 
+function searchAudits(filters) {
+  return runSafely(function () {
+    return Tracker.searchAudits(filters);
+  });
+}
+
+function getSearchFilterOptions() {
+  return runSafely(function () {
+    return Tracker.getSearchFilterOptions();
+  });
+}
+
 function saveWeeklyReview(payload) {
   return runSafely(function () {
     return Tracker.saveWeeklyReview(payload);
