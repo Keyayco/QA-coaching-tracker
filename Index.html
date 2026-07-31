@@ -1562,31 +1562,9 @@
     if (periods.length < 2) {
       return '<div class="empty-state">Not enough periods yet for a trend line.</div>';
     }
-
-    var scores = periods.map(function (p) { return p.averageScore; });
-    var minScore = Math.min.apply(null, scores);
-    var maxScore = Math.max.apply(null, scores);
-    var range = (maxScore - minScore) || 1;
-    var width = 600;
-    var height = 140;
-    var paddingX = 12;
-    var paddingY = 16;
-
-    function xFor(index) { return paddingX + (index / (periods.length - 1)) * (width - paddingX * 2); }
-    function yFor(score) { return height - paddingY - ((score - minScore) / range) * (height - paddingY * 2); }
-
-    var scorePoints = periods.map(function (p, i) { return xFor(i) + ',' + yFor(p.averageScore); }).join(' ');
-    var movingPoints = periods.map(function (p, i) { return xFor(i) + ',' + yFor(p.movingAverage); }).join(' ');
-    var dots = periods.map(function (p, i) {
-      return '<circle cx="' + xFor(i) + '" cy="' + yFor(p.averageScore) + '" r="2.5" fill="var(--primary)"></circle>';
-    }).join('');
-
-    return (
-      '<svg class="timeline-chart-svg" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
-        '<polyline points="' + movingPoints + '" fill="none" stroke="var(--text-faint)" stroke-width="1.5" stroke-dasharray="4 3"></polyline>' +
-        '<polyline points="' + scorePoints + '" fill="none" stroke="var(--primary)" stroke-width="2"></polyline>' +
-        dots +
-      '</svg>'
+    return buildLineChartSvg(
+      periods.map(function (p) { return { label: p.periodLabel, value: p.averageScore }; }),
+      { secondaryValues: periods.map(function (p) { return p.movingAverage; }) }
     );
   }
 
@@ -3329,6 +3307,7 @@
       { label: 'Failed Criteria', value: r.performance.failedCriteria.length },
       { label: 'Passed Criteria', value: r.performance.passedCriteria.length }
     ]);
+    var scoreBar = typeof r.performance.score === 'number' ? '<div style="margin: -8px 0 var(--space-4);">' + reportProgressBar(r.performance.score) + '</div>' : '';
 
     var headerSection = reportSection('Audit Header', reportTable(
       ['Field', 'Value'],
@@ -3368,7 +3347,7 @@
     });
     var recommendationsSection = reportSection('Recommendations', reportTable(['Criterion', 'Explanation', 'Coaching Tip'], recRows));
 
-    return kpis + headerSection + performanceSection + rootCauseSection + recommendationsSection;
+    return kpis + scoreBar + headerSection + performanceSection + rootCauseSection + recommendationsSection;
   }
 
   function renderAgentReportBody(r) {
@@ -3402,11 +3381,23 @@
       return [escapeHtml(rc.rootCause), rc.count, rc.percentage + '%', criticalityBadge(rc.isCritical)];
     });
 
+    var timelineChartHtml = r.scoreTimeline && r.scoreTimeline.length
+      ? buildLineChartSvg(
+          r.scoreTimeline.map(function (p) { return { label: p.periodLabel, value: p.averageScore }; }),
+          { secondaryValues: r.scoreTimeline.map(function (p) { return p.movingAverage; }) }
+        )
+      : '<div class="chart-empty">No weekly history yet.</div>';
+
+    var rootCauseChartHtml = r.rootCauses.length
+      ? buildBarChartSvg(r.rootCauses.slice(0, 8).map(function (rc) { return { label: rc.rootCause, value: rc.count }; }))
+      : '';
+
     return kpis +
+      reportSection('Score Timeline (weekly, solid = actual / dashed = 3-week average)', timelineChartHtml) +
       reportSection('Achievements', achievementsHtml) +
       reportSection('Strengths', strengthsHtml) +
       reportSection('Development Areas', devHtml) +
-      reportSection('Root Causes', reportTable(['Criterion', 'Count', '%', 'Type'], rootCauseRows)) +
+      reportSection('Root Causes', rootCauseChartHtml + reportTable(['Criterion', 'Count', '%', 'Type'], rootCauseRows)) +
       reportSection('Audit History (most recent 25)', reportTable(['Date', 'Interaction ID', 'Score', 'Template', 'Failed Criteria'], historyRows));
   }
 
@@ -3430,11 +3421,14 @@
     var deptRows = r.departmentBreakdown.map(function (d) { return [escapeHtml(d.label), formatScore(d.averageScore), d.auditCount]; });
     var recRows = r.recommendations.map(function (rec) { return [escapeHtml(rec.criterion), rec.percentage + '%', escapeHtml(rec.coachingTip || '')]; });
 
+    var rootCauseChart = r.rootCauses.length ? buildBarChartSvg(r.rootCauses.slice(0, 8).map(function (rc) { return { label: rc.rootCause, value: rc.count }; })) : '';
+    var deptChart = r.departmentBreakdown.length ? buildBarChartSvg(r.departmentBreakdown.map(function (d) { return { label: d.label, value: d.averageScore }; })) : '';
+
     return kpis +
       reportSection('Top / Lowest / Most Improved', performersHtml) +
-      reportSection('Root Causes', reportTable(['Criterion', 'Count', '%', 'Type'], rootCauseRows)) +
+      reportSection('Root Causes', rootCauseChart + reportTable(['Criterion', 'Count', '%', 'Type'], rootCauseRows)) +
       reportSection('Parameter Breakdown', reportTable(['Parameter', 'Count'], paramRows)) +
-      reportSection('Department Breakdown', reportTable(['Department', 'Avg Score', 'Audits'], deptRows)) +
+      reportSection('Department Breakdown', deptChart + reportTable(['Department', 'Avg Score', 'Audits'], deptRows)) +
       reportSection('Recommendations', reportTable(['Criterion', '% of Audits', 'Coaching Tip'], recRows));
   }
 
@@ -3453,8 +3447,19 @@
     var paramRows = r.parameterBreakdown.map(function (p) { return [escapeHtml(p.parameter), p.count]; });
     var deptRows = r.departmentBreakdown.map(function (d) { return [escapeHtml(d.label), formatScore(d.averageScore), d.auditCount]; });
 
+    var weekChart = r.weekComparisons.length
+      ? buildLineChartSvg(r.weekComparisons.map(function (w) { return { label: w.weekKey, value: w.averageScore }; }))
+      : '';
+
+    var changeChartItems = r.topImprovements.concat(r.largestDeclines)
+      .filter(function (d, index, arr) { return arr.findIndex(function (o) { return o.label === d.label; }) === index; })
+      .sort(function (a, b) { return b.deltaPct - a.deltaPct; })
+      .map(function (d) { return { label: d.label, delta: d.deltaPct }; });
+    var changeChart = changeChartItems.length ? buildDivergingBarChartSvg(changeChartItems) : '';
+
     return kpis +
-      reportSection('Week-by-Week Comparison', reportTable(['Week', 'Avg Score', 'Audits'], weekRows)) +
+      reportSection('Week-by-Week Comparison', weekChart + reportTable(['Week', 'Avg Score', 'Audits'], weekRows)) +
+      reportSection('Improvements & Declines', changeChart) +
       reportSection('Top Improvements', reportTable(['Agent', 'From', 'To', 'Change'], improvementRows)) +
       reportSection('Largest Declines', reportTable(['Agent', 'From', 'To', 'Change'], declineRows)) +
       reportSection('Root Causes', reportTable(['Criterion', 'Count', '%', 'Type'], rootCauseRows)) +
@@ -3475,10 +3480,19 @@
     var rootCauseRows = r.rootCauses.map(function (rc) { return [escapeHtml(rc.rootCause), rc.count, rc.percentage + '%', criticalityBadge(rc.isCritical)]; });
     var trendRows = r.performanceTrend.series.map(function (w) { return [escapeHtml(w.weekKey), formatScore(w.averageScore), w.auditCount]; });
 
+    var trendChart = r.performanceTrend.series.length
+      ? buildLineChartSvg(r.performanceTrend.series.map(function (w) { return { label: w.weekKey, value: w.averageScore }; }))
+      : '';
+
+    var heatmapHtml = r.agentWeekMatrix && r.agentWeekMatrix.agentLabels.length
+      ? buildHeatmapTable(r.agentWeekMatrix.agentLabels, r.agentWeekMatrix.weekLabels, r.agentWeekMatrix.matrix)
+      : '<div class="chart-empty">Not enough data for a heatmap.</div>';
+
     return kpis +
+      reportSection('Agent \u00d7 Week Heatmap', heatmapHtml) +
       reportSection('Agent Ranking', reportTable(['Agent', 'Avg Score', 'Audits', 'Critical Rate'], rankingRows)) +
       reportSection('Root Causes', reportTable(['Criterion', 'Count', '%', 'Type'], rootCauseRows)) +
-      reportSection('Performance Trend (' + r.performanceTrend.direction.direction + ')', reportTable(['Week', 'Avg Score', 'Audits'], trendRows));
+      reportSection('Performance Trend (' + r.performanceTrend.direction.direction + ')', trendChart + reportTable(['Week', 'Avg Score', 'Audits'], trendRows));
   }
 
   function renderDepartmentReportBody(r) {
@@ -3495,10 +3509,18 @@
     var rankingRows = r.agentRanking.map(function (a) { return [escapeHtml(a.label), formatScore(a.averageScore), a.auditCount]; });
     var templateRows = r.templateUsage.map(function (t) { return [escapeHtml(t.label), t.auditCount]; });
 
+    var trendChart = r.trend.series.length
+      ? buildLineChartSvg(r.trend.series.map(function (w) { return { label: w.weekKey, value: w.averageScore }; }))
+      : '';
+    var rootCauseChart = r.rootCauses.length
+      ? buildBarChartSvg(r.rootCauses.slice(0, 8).map(function (rc) { return { label: rc.rootCause, value: rc.count }; }))
+      : '';
+
     return kpis +
+      reportSection('Trend (' + r.trend.direction.direction + ')', trendChart + reportTable(['Week', 'Avg Score', 'Audits'], r.trend.series.map(function (w) { return [escapeHtml(w.weekKey), formatScore(w.averageScore), w.auditCount]; }))) +
       reportSection('Team Leaders', reportTable(['Team Leader', 'Avg Score', 'Audits', 'Critical Rate'], teamLeaderRows)) +
       reportSection('Parameter Breakdown', reportTable(['Parameter', 'Count'], paramRows)) +
-      reportSection('Root Causes', reportTable(['Criterion', 'Count', '%', 'Type'], rootCauseRows)) +
+      reportSection('Root Causes', rootCauseChart + reportTable(['Criterion', 'Count', '%', 'Type'], rootCauseRows)) +
       reportSection('Agent Rankings', reportTable(['Agent', 'Avg Score', 'Audits'], rankingRows)) +
       reportSection('Template Usage', reportTable(['Template', 'Audits'], templateRows));
   }
@@ -3520,12 +3542,25 @@
     var declineRows = r.largestDeclineDepartments.map(function (d) { return [escapeHtml(d.label), formatScore(d.from), formatScore(d.to), d.deltaPct + '%']; });
     var recRows = r.recommendations.map(function (rec) { return [escapeHtml(rec.criterion || 'General'), rec.percentage !== null ? rec.percentage + '%' : '', escapeHtml(rec.coachingTip || '')]; });
 
+    var deptChart = r.departmentComparison.length
+      ? buildBarChartSvg(r.departmentComparison.map(function (d) { return { label: d.label, value: d.averageScore }; }))
+      : '';
+    var rootCauseChart = r.top10RootCauses.length
+      ? buildBarChartSvg(r.top10RootCauses.map(function (rc) { return { label: rc.rootCause, value: rc.count }; }))
+      : '';
+    var deptChangeItems = r.mostImprovedDepartments.concat(r.largestDeclineDepartments)
+      .filter(function (d, index, arr) { return arr.findIndex(function (o) { return o.label === d.label; }) === index; })
+      .sort(function (a, b) { return b.deltaPct - a.deltaPct; })
+      .map(function (d) { return { label: d.label, delta: d.deltaPct }; });
+    var deptChangeChart = deptChangeItems.length ? buildDivergingBarChartSvg(deptChangeItems) : '';
+
     return kpis +
-      reportSection('Department Comparison', reportTable(['Department', 'Avg Score', 'Audits', 'Critical Rate'], deptRows)) +
+      reportSection('Department Comparison', deptChart + reportTable(['Department', 'Avg Score', 'Audits', 'Critical Rate'], deptRows)) +
       reportSection('Team Leader Comparison', reportTable(['Team Leader', 'Avg Score', 'Audits'], teamRows)) +
-      reportSection('Top 10 Root Causes', reportTable(['Criterion', 'Count', '%', 'Type'], rootCauseRows)) +
+      reportSection('Top 10 Root Causes', rootCauseChart + reportTable(['Criterion', 'Count', '%', 'Type'], rootCauseRows)) +
       reportSection('Highest Risk Departments', reportTable(['Department', 'Critical Failure Rate'], riskRows)) +
       reportSection('Highest Performing Departments', reportTable(['Department', 'Avg Score'], topRows)) +
+      reportSection('Department Movement (Improved / Declined)', deptChangeChart) +
       reportSection('Most Improved Departments', reportTable(['Department', 'From', 'To', 'Change'], improvedRows)) +
       reportSection('Largest Declines', reportTable(['Department', 'From', 'To', 'Change'], declineRows)) +
       reportSection('Recommendations', reportTable(['Focus', '% of Audits', 'Coaching Tip'], recRows));

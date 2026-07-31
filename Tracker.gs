@@ -2191,6 +2191,27 @@ var Tracker = (function () {
 
   // ---- Team Leader Report ---------------------------------------------------
 
+  // Agent x Week average-score grid, used only by the Team Leader Report's
+  // heatmap. Capped to the most recent 12 weeks and the agents already in
+  // the ranking, to keep the payload bounded for large teams/long histories.
+  function buildAgentWeekMatrix(records, agentRanking) {
+    var weeks = distinctNonEmpty(records.map(function (r) { return r.weekKey; })).sort().slice(-12);
+    var agents = agentRanking.slice(0, 15);
+
+    var matrix = agents.map(function (agent) {
+      return weeks.map(function (weekKey) {
+        var weekRecords = records.filter(function (r) { return r.agentId === agent.key && r.weekKey === weekKey; });
+        return computeAverageScore(weekRecords);
+      });
+    });
+
+    return {
+      agentLabels: agents.map(function (a) { return a.label; }),
+      weekLabels: weeks,
+      matrix: matrix
+    };
+  }
+
   function buildTeamLeaderReport(dataset, filters) {
     var teamLeader = toSafeString(filters.teamLeader);
     if (!teamLeader) {
@@ -2204,6 +2225,7 @@ var Tracker = (function () {
     var weeklySeries = buildWeeklyScoreSeries(records);
     var halves = splitRecordsChronologically(records);
     var trend = computeTrendDirection(computeAverageScore(halves.firstHalf), computeAverageScore(halves.secondHalf));
+    var agentWeekMatrix = buildAgentWeekMatrix(records, agentRanking);
 
     var summary = buildTeamLeaderSummary({
       teamLeader: teamLeader,
@@ -2226,6 +2248,7 @@ var Tracker = (function () {
       agentRanking: agentRanking,
       topPerformers: agentRanking.slice(0, 3),
       bottomPerformers: agentRanking.slice(-3).reverse(),
+      agentWeekMatrix: agentWeekMatrix,
       rootCauses: aggregateFailedCriteriaFromRecords(records),
       coachingSessionsLogged: countCoachingSessionsForAgents(agentIds),
       performanceTrend: { series: weeklySeries, direction: trend },
