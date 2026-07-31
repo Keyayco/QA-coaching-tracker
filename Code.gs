@@ -160,6 +160,12 @@ function getSearchFilterOptions() {
   });
 }
 
+function generateReport(type, filters) {
+  return runSafely(function () {
+    return Tracker.generateReport(type, filters);
+  });
+}
+
 function saveWeeklyReview(payload) {
   return runSafely(function () {
     return Tracker.saveWeeklyReview(payload);
