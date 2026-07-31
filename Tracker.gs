@@ -1397,9 +1397,7 @@ var Tracker = (function () {
       if (typeof f.scoreMin === 'number' && (typeof record.score !== 'number' || record.score < f.scoreMin)) { return false; }
       if (typeof f.scoreMax === 'number' && (typeof record.score !== 'number' || record.score > f.scoreMax)) { return false; }
 
-      if (normalizedAuditId &&
-        normalizeHeader(record.detailId) !== normalizeHeader(normalizedAuditId) &&
-        normalizeHeader(record.interactionId) !== normalizeHeader(normalizedAuditId)) {
+      if (normalizedAuditId && !matchesAuditId(record, normalizedAuditId)) {
         return false;
       }
 
@@ -1504,6 +1502,931 @@ var Tracker = (function () {
       }
     });
     return result.sort(function (a, b) { return a.localeCompare(b); });
+  }
+
+  // =========================================================================
+  // REPORTING ENGINE
+  // Every report type below is a thin composition of these shared helpers
+  // plus buildAuditAnalyticsDataset() - no report computes its own average,
+  // its own grouping, or its own root-cause frequency count. If two report
+  // types need "average score by X," they both call summarizeGroupedRecords
+  // with a different key function; the arithmetic itself lives in one place.
+  // =========================================================================
+
+  var REPORT_TYPES = {
+    audit: buildAuditReport,
+    agent: buildAgentReport,
+    weekly: buildWeeklyReport,
+    monthly: buildMonthlyReport,
+    teamleader: buildTeamLeaderReport,
+    department: buildDepartmentReport,
+    executive: buildExecutiveReport
+  };
+
+  // Single entry point for every report in the application. Builds the
+  // shared analytics dataset exactly once, then hands it to whichever
+  // report builder matches `type`. The frontend only ever calls this one
+  // function - never a report-specific endpoint - and only ever renders the
+  // JSON it returns.
+  function generateReport(type, filters) {
+    var normalizedType = normalizeHeader(type);
+    var builder = REPORT_TYPES[normalizedType];
+    if (!builder) {
+      return { success: false, message: 'Unknown report type: ' + type };
+    }
+
+    var dataset = buildAuditAnalyticsDataset();
+    return builder(dataset, filters || {});
+  }
+
+  // ---- Shared aggregation helpers --------------------------------------
+
+  function computeAverageScore(records) {
+    var scores = records
+      .map(function (r) { return r.score; })
+      .filter(function (v) { return typeof v === 'number' && !isNaN(v); });
+    if (!scores.length) { return null; }
+    return roundNumber(scores.reduce(function (sum, v) { return sum + v; }, 0) / scores.length, 2);
+  }
+
+  function computeCriticalFailureRate(records) {
+    if (!records.length) { return 0; }
+    var criticalCount = records.filter(function (r) { return recordHasCriticalFailure(r); }).length;
+    return roundNumber((criticalCount / records.length) * 100, 1);
+  }
+
+  function recordHasCriticalFailure(record) {
+    return record.failedCriteria.some(function (c) { return c.isCritical === true; });
+  }
+
+  // Standard-deviation-based consistency: a tighter spread of period scores
+  // scores higher. Documented, not a universal industry definition - stddev
+  // in score-points is subtracted directly from 100 and clamped to [0,100].
+  function computeConsistencyScore(scores) {
+    var validScores = (scores || []).filter(function (v) { return typeof v === 'number' && !isNaN(v); });
+    if (validScores.length < 2) { return null; }
+
+    var mean = validScores.reduce(function (sum, v) { return sum + v; }, 0) / validScores.length;
+    var variance = validScores.reduce(function (sum, v) { return sum + Math.pow(v - mean, 2); }, 0) / validScores.length;
+    var stdDev = Math.sqrt(variance);
+
+    return Math.max(0, Math.round(100 - stdDev));
+  }
+
+  // Generic "group records by a key, compute average score / audit count /
+  // critical failure rate per group" - the single implementation behind
+  // agent ranking, department breakdown, team leader breakdown, and
+  // template usage. Sorted by average score descending (groups with no
+  // scored audits sort last).
+  function summarizeGroupedRecords(records, keyFn, labelFn) {
+    var groups = {};
+
+    records.forEach(function (record) {
+      var key = keyFn(record);
+      if (!key) { return; }
+      if (!groups[key]) {
+        groups[key] = { key: key, label: labelFn(record), scores: [], criticalCount: 0, auditCount: 0 };
+      }
+      groups[key].auditCount += 1;
+      if (typeof record.score === 'number' && !isNaN(record.score)) {
+        groups[key].scores.push(record.score);
+      }
+      if (recordHasCriticalFailure(record)) {
+        groups[key].criticalCount += 1;
+      }
+    });
+
+    return Object.keys(groups).map(function (key) {
+      var g = groups[key];
+      var avg = g.scores.length
+        ? roundNumber(g.scores.reduce(function (sum, v) { return sum + v; }, 0) / g.scores.length, 2)
+        : null;
+      return {
+        key: g.key,
+        label: g.label,
+        averageScore: avg,
+        auditCount: g.auditCount,
+        criticalFailureCount: g.criticalCount,
+        criticalFailureRate: g.auditCount ? roundNumber((g.criticalCount / g.auditCount) * 100, 1) : 0
+      };
+    }).sort(function (a, b) {
+      if (a.averageScore === null) { return 1; }
+      if (b.averageScore === null) { return -1; }
+      return b.averageScore - a.averageScore;
+    });
+  }
+
+  function computeAgentRanking(records) {
+    return summarizeGroupedRecords(records, function (r) { return r.agentId; }, function (r) { return r.agentName; });
+  }
+
+  function computeDepartmentBreakdown(records) {
+    return summarizeGroupedRecords(records, function (r) { return r.departmentId; }, function (r) { return r.departmentName; });
+  }
+
+  function computeTeamLeaderBreakdown(records) {
+    return summarizeGroupedRecords(records, function (r) { return r.teamLeader; }, function (r) { return r.teamLeader; });
+  }
+
+  function computeTemplateUsage(records) {
+    return summarizeGroupedRecords(
+      records,
+      function (r) { return r.templateId || 'unresolved'; },
+      function (r) { return r.templateResolved ? (r.templateName + ' v' + r.templateVersion) : 'Unresolved'; }
+    );
+  }
+
+  // Groups failed criteria by Parameter (used for the Parameter Breakdown
+  // sections). Each occurrence within a record counts once per record.
+  function computeParameterBreakdown(records) {
+    var counts = {};
+    records.forEach(function (record) {
+      var parametersInRecord = uniqueStrings(record.failedCriteria.map(function (c) { return c.parameter; }).filter(Boolean));
+      parametersInRecord.forEach(function (parameter) {
+        var key = normalizeHeader(parameter);
+        if (!counts[key]) { counts[key] = { parameter: parameter, count: 0 }; }
+        counts[key].count += 1;
+      });
+    });
+    return Object.keys(counts).map(function (key) { return counts[key]; })
+      .sort(function (a, b) { return b.count - a.count; });
+  }
+
+  // Root cause frequency, generalized to work directly off the analytics
+  // dataset's already-resolved failedCriteria (name/parameter/attribute/
+  // isCritical) rather than re-parsing raw Failed Criteria text - this is
+  // the reporting engine's canonical root-cause aggregation, reusing the
+  // same "count once per record" rule as every other root-cause count in
+  // the app (computeFailedCriteriaAggregate, computeTopRootCauses' successor).
+  function aggregateFailedCriteriaFromRecords(records) {
+    var counts = {};
+    records.forEach(function (record) {
+      var uniqueNames = uniqueStrings(record.failedCriteria.map(function (c) { return c.name; }));
+      uniqueNames.forEach(function (name) {
+        var key = normalizeHeader(name);
+        var matchingCriterion = record.failedCriteria.find(function (c) { return normalizeHeader(c.name) === key; });
+        if (!counts[key]) {
+          counts[key] = {
+            rootCause: name,
+            count: 0,
+            parameter: matchingCriterion ? matchingCriterion.parameter : '',
+            attribute: matchingCriterion ? matchingCriterion.attribute : '',
+            isCritical: matchingCriterion ? matchingCriterion.isCritical : null,
+            scores: []
+          };
+        }
+        counts[key].count += 1;
+        if (typeof record.score === 'number' && !isNaN(record.score)) {
+          counts[key].scores.push(record.score);
+        }
+      });
+    });
+
+    var totalRecords = records.length || 1;
+    return Object.keys(counts).map(function (key) {
+      var c = counts[key];
+      return {
+        rootCause: c.rootCause,
+        count: c.count,
+        percentage: roundNumber((c.count / totalRecords) * 100, 1),
+        parameter: c.parameter,
+        attribute: c.attribute,
+        isCritical: c.isCritical,
+        averageScoreWhenPresent: c.scores.length ? roundNumber(c.scores.reduce(function (s, v) { return s + v; }, 0) / c.scores.length, 2) : null
+      };
+    }).sort(function (a, b) { return b.count - a.count; });
+  }
+
+  // Splits records into two halves by chronological order (not by date
+  // range midpoint) - matches the same trend convention already used by
+  // the Agent Profile's Development Areas trend, so "improving/declining"
+  // means the same thing everywhere in the app.
+  function splitRecordsChronologically(records) {
+    var sorted = records.filter(function (r) { return r.auditDateObj; })
+      .sort(function (a, b) { return a.auditDateObj.getTime() - b.auditDateObj.getTime(); });
+    var midpoint = Math.floor(sorted.length / 2);
+    return { firstHalf: sorted.slice(0, midpoint), secondHalf: sorted.slice(midpoint) };
+  }
+
+  function computeTrendDirection(previousAvg, currentAvg) {
+    if (typeof previousAvg !== 'number' || typeof currentAvg !== 'number') {
+      return { direction: 'Insufficient data', deltaPct: null };
+    }
+    var deltaPct = previousAvg !== 0 ? roundNumber(((currentAvg - previousAvg) / previousAvg) * 100, 1) : null;
+    var direction = currentAvg > previousAvg ? 'Improving' : (currentAvg < previousAvg ? 'Declining' : 'Stable');
+    return { direction: direction, deltaPct: deltaPct };
+  }
+
+  // The one place "does this Audit ID match this record" is decided - reused
+  // by both Search (searchAudits) and the Audit Report, so they can never
+  // disagree about what counts as a match.
+  function matchesAuditId(record, auditId) {
+    var normalized = normalizeHeader(auditId);
+    if (!normalized) { return false; }
+    return normalizeHeader(record.detailId) === normalized || normalizeHeader(record.interactionId) === normalized;
+  }
+
+  function formatPercentValue(value) {
+    return (value === null || value === undefined) ? 'N/A' : (value + '%');
+  }
+
+  // ---- Audit Report -------------------------------------------------------
+
+  function buildAuditReport(dataset, filters) {
+    var auditId = toSafeString(filters.auditId);
+    if (!auditId) {
+      return { success: false, message: 'An Audit ID is required.' };
+    }
+
+    var record = dataset.find(function (r) { return matchesAuditId(r, auditId); });
+    if (!record) {
+      return { success: false, message: 'No audit found matching ID "' + auditId + '".' };
+    }
+
+    var templateCriteria = record.templateResolved ? getScorecardCriteria(record.templateId).criteria : [];
+    var failedNames = record.failedCriteria.map(function (c) { return c.name; });
+
+    var passedCriteria = templateCriteria.filter(function (criterion) {
+      return !failedNames.some(function (name) { return normalizeHeader(name) === normalizeHeader(criterion.name); });
+    });
+
+    var recommendations = record.failedCriteria.map(function (failed) {
+      var matched = templateCriteria.find(function (c) { return normalizeHeader(c.name) === normalizeHeader(failed.name); });
+      return {
+        criterion: failed.name,
+        explanation: matched ? matched.explanation : '',
+        coachingTip: matched ? matched.coachingTip : ''
+      };
+    });
+
+    // Parameter -> Attribute -> Criterion grouping of this audit's own
+    // failures (a single-audit tree, not a frequency count).
+    var rootCauseTree = {};
+    record.failedCriteria.forEach(function (c) {
+      var parameterKey = c.parameter || 'Unspecified Parameter';
+      var attributeKey = c.attribute || 'Unspecified Attribute';
+      if (!rootCauseTree[parameterKey]) { rootCauseTree[parameterKey] = {}; }
+      if (!rootCauseTree[parameterKey][attributeKey]) { rootCauseTree[parameterKey][attributeKey] = []; }
+      rootCauseTree[parameterKey][attributeKey].push(c.name);
+    });
+    var rootCauseGrouping = Object.keys(rootCauseTree).map(function (parameter) {
+      return {
+        parameter: parameter,
+        attributes: Object.keys(rootCauseTree[parameter]).map(function (attribute) {
+          return { attribute: attribute, criteria: rootCauseTree[parameter][attribute] };
+        })
+      };
+    });
+
+    var criticalFailures = record.failedCriteria.filter(function (c) { return c.isCritical === true; });
+
+    var summary = buildAuditSummary({
+      score: record.score,
+      criticalFailures: criticalFailures,
+      failedCriteria: record.failedCriteria
+    });
+
+    var limitations = [];
+    if (!record.templateResolved) {
+      limitations.push('Scorecard Template could not be determined for this audit (Department + effective dates found no match), so Passed Criteria and some Recommendations are unavailable.');
+    }
+    limitations.push('"Auditor" is not currently tracked anywhere in the data model, so it cannot be shown.');
+
+    return {
+      success: true,
+      reportType: 'audit',
+      header: {
+        auditId: record.detailId,
+        interactionId: record.interactionId,
+        agentName: record.agentName,
+        departmentName: record.departmentName,
+        teamLeader: record.teamLeader,
+        weekEnding: record.weekEnding,
+        auditDate: record.auditDate,
+        templateName: record.templateResolved ? record.templateName : 'Unresolved',
+        templateVersion: record.templateResolved ? record.templateVersion : ''
+      },
+      performance: {
+        score: record.score,
+        criticalFailures: criticalFailures,
+        failedCriteria: record.failedCriteria,
+        passedCriteria: passedCriteria,
+        comments: record.comments
+      },
+      rootCauseGrouping: rootCauseGrouping,
+      recommendations: recommendations,
+      summary: summary,
+      limitations: limitations
+    };
+  }
+
+  function buildAuditSummary(data) {
+    var lines = [];
+    lines.push('The audit achieved ' + formatPercentValue(data.score) + '.');
+
+    if (data.criticalFailures.length) {
+      lines.push('Critical failure(s) occurred: ' + data.criticalFailures.map(function (c) { return c.name; }).join(', ') + '.');
+    } else {
+      lines.push('No critical failures occurred.');
+    }
+
+    if (data.failedCriteria.length) {
+      var topParameters = uniqueStrings(data.failedCriteria.map(function (c) { return c.parameter; }).filter(Boolean)).slice(0, 2);
+      if (topParameters.length) {
+        lines.push('The primary opportunities relate to ' + topParameters.join(' and ') + '.');
+      }
+      var topCriteria = data.failedCriteria.slice(0, 2).map(function (c) { return c.name; });
+      lines.push('Coaching should focus on ' + topCriteria.join(' and ') + ' accuracy.');
+    } else {
+      lines.push('All scorecard criteria were passed.');
+    }
+
+    return lines.join(' ');
+  }
+
+  // ---- Agent Report --------------------------------------------------------
+
+  function buildAgentReport(dataset, filters) {
+    var agentId = toSafeString(filters.agentId);
+    if (!agentId) {
+      return { success: false, message: 'An Agent is required.' };
+    }
+
+    // Reuse the existing Agent Dashboard entirely for profile, KPIs,
+    // performance-by-stream, performance timeline, and strengths/development
+    // - none of that is recomputed here.
+    var agentDashboard = getAgentDashboard(agentId);
+    if (!agentDashboard.success) {
+      return agentDashboard;
+    }
+
+    var agentRecords = dataset.filter(function (r) { return r.agentId === agentId; })
+      .sort(function (a, b) { return (b.auditDateObj ? b.auditDateObj.getTime() : 0) - (a.auditDateObj ? a.auditDateObj.getTime() : 0); });
+
+    var auditHistory = agentRecords.map(function (r) {
+      return {
+        interactionId: r.interactionId,
+        auditDate: r.auditDate,
+        weekEnding: r.weekEnding,
+        score: r.score,
+        templateName: r.templateResolved ? (r.templateName + ' v' + r.templateVersion) : 'Unresolved',
+        failedCriteria: r.failedCriteria.map(function (c) { return c.name; }),
+        comments: r.comments
+      };
+    });
+
+    var criticalFailureCount = agentRecords.filter(function (r) { return recordHasCriticalFailure(r); }).length;
+    var rootCauses = aggregateFailedCriteriaFromRecords(agentRecords);
+
+    var weeklyTimeline = (agentDashboard.summary.performanceTimeline && agentDashboard.summary.performanceTimeline.weekly) || [];
+    var consistencyScore = computeConsistencyScore(weeklyTimeline.map(function (p) { return p.averageScore; }));
+
+    var halves = splitRecordsChronologically(agentRecords);
+    var improvementTrend = computeTrendDirection(computeAverageScore(halves.firstHalf), computeAverageScore(halves.secondHalf));
+
+    var achievements = computeAgentAchievements(agentDashboard, agentRecords, consistencyScore);
+
+    var topDevelopmentArea = (agentDashboard.summary.criteriaAnalysis.developmentAreas || [])[0];
+
+    var summary = buildAgentSummary({
+      name: agentDashboard.agent.name,
+      weekly: weeklyTimeline,
+      topDevelopmentArea: topDevelopmentArea ? topDevelopmentArea.criterion : ''
+    });
+
+    return {
+      success: true,
+      reportType: 'agent',
+      profile: agentDashboard.agent,
+      performanceSummary: agentDashboard.summary,
+      auditHistory: auditHistory,
+      scoreTimeline: weeklyTimeline,
+      rootCauses: rootCauses,
+      strengths: agentDashboard.summary.criteriaAnalysis.strengths,
+      developmentAreas: agentDashboard.summary.criteriaAnalysis.developmentAreas,
+      criticalFailureCount: criticalFailureCount,
+      consistencyScore: consistencyScore,
+      improvementTrend: improvementTrend,
+      achievements: achievements,
+      summary: summary,
+      limitations: [
+        'Achievements shown are a first-pass evidence-based subset (95% Club, Dispute Free, Consistency Champion, Audit Volume milestones) - the fuller badge set described in earlier planning (Perfect Week, Fast Improver, etc.) needs additional historical tracking not yet in the data model.',
+        'Coaching History is available via the existing Coachings page/history and is intentionally not recomputed here to avoid duplicating that data.'
+      ]
+    };
+  }
+
+  // First-pass, evidence-based achievements only - every badge here is
+  // directly checkable against data already computed above, nothing
+  // invented. See the report's `limitations` for what's intentionally
+  // NOT included yet.
+  function computeAgentAchievements(agentDashboard, agentRecords, consistencyScore) {
+    var achievements = [];
+
+    if (typeof agentDashboard.summary.overallAveragePerformance === 'number' && agentDashboard.summary.overallAveragePerformance >= 95) {
+      achievements.push({ name: '95% Club', detail: 'Overall average performance is ' + agentDashboard.summary.overallAveragePerformance + '%.' });
+    }
+    if (typeof agentDashboard.summary.openDisputeCount === 'number' && agentDashboard.summary.openDisputeCount === 0) {
+      achievements.push({ name: 'Dispute Free', detail: 'No open disputes currently on record.' });
+    }
+    if (typeof consistencyScore === 'number' && consistencyScore >= 90) {
+      achievements.push({ name: 'Consistency Champion', detail: 'Consistency score of ' + consistencyScore + '.' });
+    }
+    if (agentRecords.length >= 100) {
+      achievements.push({ name: '100 Audits Reviewed', detail: agentRecords.length + ' audits reviewed to date.' });
+    }
+
+    return achievements;
+  }
+
+  function buildAgentSummary(data) {
+    var weekly = data.weekly || [];
+    if (weekly.length < 2) {
+      return 'Not enough weekly history yet to summarize a trend for ' + (data.name || 'this agent') + '.';
+    }
+
+    var first = weekly[0];
+    var last = weekly[weekly.length - 1];
+    var lines = [];
+    lines.push('Over the last ' + weekly.length + ' weeks, ' + data.name + ' has moved from ' +
+      formatPercentValue(first.averageScore) + ' to ' + formatPercentValue(last.averageScore) + '.');
+
+    if (data.topDevelopmentArea) {
+      lines.push(data.topDevelopmentArea + ' remains the primary coaching focus.');
+    }
+
+    return lines.join(' ');
+  }
+
+  // ---- Weekly Report --------------------------------------------------------
+
+  function buildWeeklyReport(dataset, filters) {
+    var weekDate = parseDate(filters.week);
+    if (!weekDate) {
+      return { success: false, message: 'A valid week (date within it) is required.' };
+    }
+
+    var weekKey = getIsoWeekKey(weekDate);
+    var previousWeekDate = new Date(weekDate.getTime() - 7 * 86400000);
+    var previousWeekKey = getIsoWeekKey(previousWeekDate);
+
+    var currentRecords = dataset.filter(function (r) { return r.weekKey === weekKey; });
+    var previousRecords = dataset.filter(function (r) { return r.weekKey === previousWeekKey; });
+
+    var averageScore = computeAverageScore(currentRecords);
+    var auditCount = currentRecords.length;
+    var criticalFailureCount = currentRecords.filter(function (r) { return recordHasCriticalFailure(r); }).length;
+    var generalFailureCount = currentRecords.filter(function (r) {
+      return r.failedCriteria.some(function (c) { return c.isCritical === false; });
+    }).length;
+
+    var agentRanking = computeAgentRanking(currentRecords);
+    var topPerformer = agentRanking.length ? agentRanking[0] : null;
+    var lowestPerformer = agentRanking.length ? agentRanking[agentRanking.length - 1] : null;
+
+    var previousAgentRanking = computeAgentRanking(previousRecords);
+    var previousByAgent = {};
+    previousAgentRanking.forEach(function (a) { previousByAgent[a.key] = a; });
+    var mostImprovedAgent = null;
+    var bestDelta = null;
+    agentRanking.forEach(function (agent) {
+      var previous = previousByAgent[agent.key];
+      if (previous && typeof previous.averageScore === 'number' && typeof agent.averageScore === 'number') {
+        var delta = roundNumber(agent.averageScore - previous.averageScore, 2);
+        if (bestDelta === null || delta > bestDelta) {
+          bestDelta = delta;
+          mostImprovedAgent = { label: agent.label, deltaPct: delta, from: previous.averageScore, to: agent.averageScore };
+        }
+      }
+    });
+
+    var rootCauses = aggregateFailedCriteriaFromRecords(currentRecords);
+    var recommendations = buildRecommendationsFromRootCauses(rootCauses.slice(0, 3));
+
+    var summary = buildWeeklySummary({
+      weekKey: weekKey,
+      averageScore: averageScore,
+      auditCount: auditCount,
+      criticalFailureCount: criticalFailureCount,
+      topRootCause: rootCauses.length ? rootCauses[0] : null,
+      trend: computeTrendDirection(computeAverageScore(previousRecords), averageScore)
+    });
+
+    return {
+      success: true,
+      reportType: 'weekly',
+      week: weekKey,
+      overview: {
+        averageScore: averageScore,
+        auditCount: auditCount,
+        criticalFailureCount: criticalFailureCount,
+        generalFailureCount: generalFailureCount
+      },
+      topPerformer: topPerformer,
+      lowestPerformer: lowestPerformer,
+      mostImprovedAgent: mostImprovedAgent,
+      rootCauses: rootCauses,
+      parameterBreakdown: computeParameterBreakdown(currentRecords),
+      departmentBreakdown: computeDepartmentBreakdown(currentRecords),
+      recommendations: recommendations,
+      summary: summary,
+      limitations: [
+        'Completion % is intentionally omitted - there is no configured audit quota/target anywhere in the data model to measure completion against, and inventing one would be misleading.'
+      ]
+    };
+  }
+
+  function buildWeeklySummary(data) {
+    var lines = [];
+    lines.push('Week ' + data.weekKey + ' averaged ' + formatPercentValue(data.averageScore) +
+      ' across ' + data.auditCount + ' audit(s), with ' + data.criticalFailureCount + ' critical failure(s).');
+
+    if (data.topRootCause) {
+      lines.push('The most common root cause was ' + data.topRootCause.rootCause + ' (' + data.topRootCause.percentage + '% of audits).');
+    }
+
+    if (data.trend.direction !== 'Insufficient data') {
+      lines.push('This is ' + data.trend.direction.toLowerCase() + ' compared to the previous week' +
+        (data.trend.deltaPct !== null ? ' (' + (data.trend.deltaPct > 0 ? '+' : '') + data.trend.deltaPct + '%)' : '') + '.');
+    }
+
+    return lines.join(' ');
+  }
+
+  // ---- Monthly Report -------------------------------------------------------
+
+  function buildMonthlyReport(dataset, filters) {
+    var monthKey = toSafeString(filters.month);
+    if (!monthKey) {
+      return { success: false, message: 'A month is required.' };
+    }
+
+    var previousMonthKey = shiftMonthKey(monthKey, -1);
+    var currentRecords = dataset.filter(function (r) { return r.monthKey === monthKey; });
+    var previousRecords = dataset.filter(function (r) { return r.monthKey === previousMonthKey; });
+
+    var weeksInMonth = {};
+    currentRecords.forEach(function (r) {
+      if (!r.weekKey) { return; }
+      if (!weeksInMonth[r.weekKey]) { weeksInMonth[r.weekKey] = []; }
+      weeksInMonth[r.weekKey].push(r);
+    });
+    var weekComparisons = Object.keys(weeksInMonth).sort().map(function (weekKey) {
+      return { weekKey: weekKey, averageScore: computeAverageScore(weeksInMonth[weekKey]), auditCount: weeksInMonth[weekKey].length };
+    });
+
+    var currentAgentRanking = computeAgentRanking(currentRecords);
+    var previousAgentRanking = computeAgentRanking(previousRecords);
+    var previousByAgent = {};
+    previousAgentRanking.forEach(function (a) { previousByAgent[a.key] = a; });
+
+    var deltas = currentAgentRanking
+      .map(function (agent) {
+        var previous = previousByAgent[agent.key];
+        if (!previous || typeof previous.averageScore !== 'number' || typeof agent.averageScore !== 'number') { return null; }
+        return { label: agent.label, from: previous.averageScore, to: agent.averageScore, deltaPct: roundNumber(agent.averageScore - previous.averageScore, 2) };
+      })
+      .filter(Boolean);
+
+    var topImprovements = deltas.slice().sort(function (a, b) { return b.deltaPct - a.deltaPct; }).slice(0, 3);
+    var largestDeclines = deltas.slice().sort(function (a, b) { return a.deltaPct - b.deltaPct; }).slice(0, 3);
+
+    var currentAvg = computeAverageScore(currentRecords);
+    var previousAvg = computeAverageScore(previousRecords);
+    var trend = computeTrendDirection(previousAvg, currentAvg);
+
+    var criticalTrend = computeTrendDirection(computeCriticalFailureRate(previousRecords), computeCriticalFailureRate(currentRecords));
+
+    var summary = buildMonthlySummary({
+      monthKey: monthKey,
+      averageScore: currentAvg,
+      auditCount: currentRecords.length,
+      trend: trend,
+      topImprovement: topImprovements[0] || null
+    });
+
+    return {
+      success: true,
+      reportType: 'monthly',
+      month: monthKey,
+      overview: { averageScore: currentAvg, auditCount: currentRecords.length, criticalFailureRate: computeCriticalFailureRate(currentRecords) },
+      weekComparisons: weekComparisons,
+      trendSummary: trend,
+      topImprovements: topImprovements,
+      largestDeclines: largestDeclines,
+      criticalFailureTrend: criticalTrend,
+      rootCauses: aggregateFailedCriteriaFromRecords(currentRecords),
+      parameterBreakdown: computeParameterBreakdown(currentRecords),
+      departmentBreakdown: computeDepartmentBreakdown(currentRecords),
+      summary: summary,
+      limitations: []
+    };
+  }
+
+  function shiftMonthKey(monthKey, deltaMonths) {
+    var parts = monthKey.split('-');
+    var year = parseInt(parts[0], 10);
+    var month = parseInt(parts[1], 10) - 1;
+    var shifted = new Date(year, month + deltaMonths, 1);
+    return shifted.getFullYear() + '-' + padNumber(shifted.getMonth() + 1, 2);
+  }
+
+  function buildMonthlySummary(data) {
+    var lines = [];
+    lines.push(data.monthKey + ' averaged ' + formatPercentValue(data.averageScore) + ' across ' + data.auditCount + ' audit(s).');
+    if (data.trend.direction !== 'Insufficient data') {
+      lines.push('This is ' + data.trend.direction.toLowerCase() + ' month-over-month' +
+        (data.trend.deltaPct !== null ? ' (' + (data.trend.deltaPct > 0 ? '+' : '') + data.trend.deltaPct + '%)' : '') + '.');
+    }
+    if (data.topImprovement) {
+      lines.push(data.topImprovement.label + ' showed the largest improvement, moving from ' +
+        formatPercentValue(data.topImprovement.from) + ' to ' + formatPercentValue(data.topImprovement.to) + '.');
+    }
+    return lines.join(' ');
+  }
+
+  // Shared by every report's Recommendations section: turns a list of
+  // aggregated root causes into coaching recommendations using the
+  // existing Scorecard Criteria explanations/coaching tips - reused rather
+  // than re-implemented per report type.
+  function buildRecommendationsFromRootCauses(rootCauses) {
+    var criteriaLookup = getAllActiveCriteriaAcrossTemplates().criteria;
+    return rootCauses.map(function (rootCause) {
+      var matched = criteriaLookup.find(function (c) { return normalizeHeader(c.name) === normalizeHeader(rootCause.rootCause); });
+      return {
+        criterion: rootCause.rootCause,
+        percentage: rootCause.percentage,
+        coachingTip: matched ? matched.coachingTip : ''
+      };
+    });
+  }
+
+  // Weekly-grouped average score series for an arbitrary record set - the
+  // shared "trend over time" shape reused by Team Leader and Department
+  // reports (both want a simple chronological score series, not the full
+  // Performance Timeline machinery built for individual agents).
+  function buildWeeklyScoreSeries(records) {
+    var byWeek = {};
+    records.forEach(function (r) {
+      if (!r.weekKey) { return; }
+      if (!byWeek[r.weekKey]) { byWeek[r.weekKey] = []; }
+      byWeek[r.weekKey].push(r);
+    });
+    return Object.keys(byWeek).sort().map(function (weekKey) {
+      return { weekKey: weekKey, averageScore: computeAverageScore(byWeek[weekKey]), auditCount: byWeek[weekKey].length };
+    });
+  }
+
+  // Lightweight secondary read - Coaching Log isn't part of the audit
+  // analytics dataset (coaching sessions aren't audits), so this reads it
+  // directly rather than folding it into buildAuditAnalyticsDataset().
+  function countCoachingSessionsForAgents(agentIds) {
+    var coachingData = readSheet(SHEETS.coachingLog);
+    var idSet = {};
+    agentIds.forEach(function (id) { idSet[id] = true; });
+    return coachingData.rows.filter(function (row) {
+      return idSet[toSafeString(getFieldValue(row, [FIELD_NAMES.agentId]))];
+    }).length;
+  }
+
+  // ---- Team Leader Report ---------------------------------------------------
+
+  function buildTeamLeaderReport(dataset, filters) {
+    var teamLeader = toSafeString(filters.teamLeader);
+    if (!teamLeader) {
+      return { success: false, message: 'A Team Leader is required.' };
+    }
+
+    var records = dataset.filter(function (r) { return normalizeHeader(r.teamLeader) === normalizeHeader(teamLeader); });
+    var agentIds = distinctNonEmpty(records.map(function (r) { return r.agentId; }));
+    var agentRanking = computeAgentRanking(records);
+
+    var weeklySeries = buildWeeklyScoreSeries(records);
+    var halves = splitRecordsChronologically(records);
+    var trend = computeTrendDirection(computeAverageScore(halves.firstHalf), computeAverageScore(halves.secondHalf));
+
+    var summary = buildTeamLeaderSummary({
+      teamLeader: teamLeader,
+      averageScore: computeAverageScore(records),
+      agentCount: agentIds.length,
+      trend: trend,
+      topRootCause: aggregateFailedCriteriaFromRecords(records)[0] || null
+    });
+
+    return {
+      success: true,
+      reportType: 'teamleader',
+      teamLeader: teamLeader,
+      overview: {
+        averageScore: computeAverageScore(records),
+        auditCount: records.length,
+        agentCount: agentIds.length,
+        criticalFailureRate: computeCriticalFailureRate(records)
+      },
+      agentRanking: agentRanking,
+      topPerformers: agentRanking.slice(0, 3),
+      bottomPerformers: agentRanking.slice(-3).reverse(),
+      rootCauses: aggregateFailedCriteriaFromRecords(records),
+      coachingSessionsLogged: countCoachingSessionsForAgents(agentIds),
+      performanceTrend: { series: weeklySeries, direction: trend },
+      summary: summary,
+      limitations: [
+        'Team Leader is a text field on Agents rather than its own tracked entity, so this report groups by exact text match - inconsistent spelling/casing across records would split what should be one team.',
+        '"Coaching Completion" is reported as a raw count of logged sessions, not a percentage against a target, since no coaching quota exists in the data model.'
+      ]
+    };
+  }
+
+  function buildTeamLeaderSummary(data) {
+    var lines = [];
+    lines.push(data.teamLeader + '\u2019s team averaged ' + formatPercentValue(data.averageScore) + ' across ' + data.agentCount + ' agent(s).');
+    if (data.trend.direction !== 'Insufficient data') {
+      lines.push('Performance is ' + data.trend.direction.toLowerCase() + ' over the period covered.');
+    }
+    if (data.topRootCause) {
+      lines.push('The most common root cause is ' + data.topRootCause.rootCause + '.');
+    }
+    return lines.join(' ');
+  }
+
+  // ---- Department Report ----------------------------------------------------
+
+  function buildDepartmentReport(dataset, filters) {
+    var departmentId = toSafeString(filters.departmentId);
+    if (!departmentId) {
+      return { success: false, message: 'A Department is required.' };
+    }
+
+    var records = dataset.filter(function (r) { return r.departmentId === departmentId; });
+    var teamLeaders = computeTeamLeaderBreakdown(records);
+    var agentRanking = computeAgentRanking(records);
+    var weeklySeries = buildWeeklyScoreSeries(records);
+
+    var halves = splitRecordsChronologically(records);
+    var trend = computeTrendDirection(computeAverageScore(halves.firstHalf), computeAverageScore(halves.secondHalf));
+
+    var departmentName = records.length ? records[0].departmentName : departmentId;
+
+    var summary = buildDepartmentSummary({
+      departmentName: departmentName,
+      averageScore: computeAverageScore(records),
+      auditCount: records.length,
+      trend: trend,
+      topRootCause: aggregateFailedCriteriaFromRecords(records)[0] || null
+    });
+
+    return {
+      success: true,
+      reportType: 'department',
+      department: { departmentId: departmentId, departmentName: departmentName },
+      overview: {
+        averageScore: computeAverageScore(records),
+        auditCount: records.length,
+        criticalFailureRate: computeCriticalFailureRate(records)
+      },
+      teamLeaders: teamLeaders,
+      parameterBreakdown: computeParameterBreakdown(records),
+      rootCauses: aggregateFailedCriteriaFromRecords(records),
+      agentRanking: agentRanking,
+      templateUsage: computeTemplateUsage(records),
+      trend: { series: weeklySeries, direction: trend },
+      summary: summary,
+      limitations: []
+    };
+  }
+
+  function buildDepartmentSummary(data) {
+    var lines = [];
+    lines.push(data.departmentName + ' averaged ' + formatPercentValue(data.averageScore) + ' across ' + data.auditCount + ' audit(s).');
+    if (data.trend.direction !== 'Insufficient data') {
+      lines.push('Performance is ' + data.trend.direction.toLowerCase() + ' over the period covered.');
+    }
+    if (data.topRootCause) {
+      lines.push(data.topRootCause.rootCause + ' is the most common root cause, present in ' + data.topRootCause.percentage + '% of audits.');
+    }
+    return lines.join(' ');
+  }
+
+  // ---- Executive Report -----------------------------------------------------
+
+  function buildExecutiveReport(dataset, filters) {
+    var dateFrom = filters.dateFrom ? parseDate(filters.dateFrom) : null;
+    var dateTo = filters.dateTo ? parseDate(filters.dateTo) : null;
+
+    var records = dataset.filter(function (r) {
+      if (!dateFrom && !dateTo) { return true; }
+      if (!r.auditDateObj) { return false; }
+      if (dateFrom && r.auditDateObj.getTime() < dateFrom.getTime()) { return false; }
+      if (dateTo && r.auditDateObj.getTime() > dateTo.getTime()) { return false; }
+      return true;
+    });
+
+    var agentData = readSheet(SHEETS.agents);
+    var activeAgentCount = agentData.rows.filter(function (row) {
+      return isTruthyValue(getFieldValue(row, [FIELD_NAMES.status])) || !findHeader(agentData.headers, [FIELD_NAMES.status]);
+    }).length;
+    var auditedAgentCount = distinctNonEmpty(records.map(function (r) { return r.agentId; })).length;
+    var auditCoveragePct = activeAgentCount ? roundNumber((auditedAgentCount / activeAgentCount) * 100, 1) : null;
+
+    var departmentComparison = computeDepartmentBreakdown(records);
+    var teamLeaderComparison = computeTeamLeaderBreakdown(records);
+    var top10RootCauses = aggregateFailedCriteriaFromRecords(records).slice(0, 10);
+
+    var highestRiskDepartments = departmentComparison.slice().sort(function (a, b) { return b.criticalFailureRate - a.criticalFailureRate; }).slice(0, 3);
+    var highestPerformingDepartments = departmentComparison.slice(0, 3);
+
+    var midpointSplit = splitRecordsByDateHalves(records);
+    var firstHalfDeptBreakdown = computeDepartmentBreakdown(midpointSplit.firstHalf);
+    var secondHalfDeptBreakdown = computeDepartmentBreakdown(midpointSplit.secondHalf);
+    var firstHalfByKey = {};
+    firstHalfDeptBreakdown.forEach(function (d) { firstHalfByKey[d.key] = d; });
+
+    var departmentDeltas = secondHalfDeptBreakdown
+      .map(function (d) {
+        var previous = firstHalfByKey[d.key];
+        if (!previous || typeof previous.averageScore !== 'number' || typeof d.averageScore !== 'number') { return null; }
+        return { label: d.label, from: previous.averageScore, to: d.averageScore, deltaPct: roundNumber(d.averageScore - previous.averageScore, 2) };
+      })
+      .filter(Boolean);
+
+    var mostImprovedDepartments = departmentDeltas.slice().sort(function (a, b) { return b.deltaPct - a.deltaPct; }).slice(0, 3);
+    var largestDeclineDepartments = departmentDeltas.slice().sort(function (a, b) { return a.deltaPct - b.deltaPct; }).slice(0, 3);
+
+    var coachingActivity = countCoachingSessionsForAgents(distinctNonEmpty(records.map(function (r) { return r.agentId; })));
+
+    var overallQA = computeAverageScore(records);
+    var criticalFailureRate = computeCriticalFailureRate(records);
+
+    var summary = buildExecutiveSummary({
+      overallQA: overallQA,
+      auditCoveragePct: auditCoveragePct,
+      criticalFailureRate: criticalFailureRate,
+      highestPerforming: highestPerformingDepartments[0] || null,
+      highestRisk: highestRiskDepartments[0] || null,
+      topRootCause: top10RootCauses[0] || null
+    });
+
+    var recommendations = buildRecommendationsFromRootCauses(top10RootCauses.slice(0, 3));
+    if (highestRiskDepartments.length && highestRiskDepartments[0].criticalFailureRate > 0) {
+      recommendations.push({
+        criterion: null,
+        percentage: null,
+        coachingTip: 'Prioritize a critical-failure review with ' + highestRiskDepartments[0].label +
+          ' (' + highestRiskDepartments[0].criticalFailureRate + '% critical failure rate).'
+      });
+    }
+
+    return {
+      success: true,
+      reportType: 'executive',
+      overview: { overallQA: overallQA, auditCoveragePct: auditCoveragePct, criticalFailureRate: criticalFailureRate, auditCount: records.length },
+      departmentComparison: departmentComparison,
+      teamLeaderComparison: teamLeaderComparison,
+      top10RootCauses: top10RootCauses,
+      highestRiskDepartments: highestRiskDepartments,
+      highestPerformingDepartments: highestPerformingDepartments,
+      mostImprovedDepartments: mostImprovedDepartments,
+      largestDeclineDepartments: largestDeclineDepartments,
+      coachingActivity: coachingActivity,
+      recommendations: recommendations,
+      summary: summary,
+      limitations: [
+        '"Most Improved"/"Largest Decline" compare the first half of the selected period to the second half (chronological midpoint), not a specific prior period, unless a date range is provided.',
+        'Audit Coverage assumes an "Active" Status column exists on Agents; departments/agents without a Status column are counted as active by default.'
+      ]
+    };
+  }
+
+  function splitRecordsByDateHalves(records) {
+    var sorted = records.filter(function (r) { return r.auditDateObj; })
+      .sort(function (a, b) { return a.auditDateObj.getTime() - b.auditDateObj.getTime(); });
+    if (!sorted.length) { return { firstHalf: [], secondHalf: [] }; }
+
+    var earliestTime = sorted[0].auditDateObj.getTime();
+    var latestTime = sorted[sorted.length - 1].auditDateObj.getTime();
+    var midpointTime = earliestTime + (latestTime - earliestTime) / 2;
+
+    return {
+      firstHalf: sorted.filter(function (r) { return r.auditDateObj.getTime() <= midpointTime; }),
+      secondHalf: sorted.filter(function (r) { return r.auditDateObj.getTime() > midpointTime; })
+    };
+  }
+
+  function buildExecutiveSummary(data) {
+    var lines = [];
+    lines.push('Overall QA is ' + formatPercentValue(data.overallQA) +
+      (data.auditCoveragePct !== null ? ' with ' + data.auditCoveragePct + '% agent audit coverage' : '') + '.');
+    lines.push('The critical failure rate stands at ' + data.criticalFailureRate + '%.');
+    if (data.highestPerforming) {
+      lines.push(data.highestPerforming.label + ' is the highest performing department at ' + formatPercentValue(data.highestPerforming.averageScore) + '.');
+    }
+    if (data.highestRisk && data.highestRisk.criticalFailureRate > 0) {
+      lines.push(data.highestRisk.label + ' carries the highest critical failure rate at ' + data.highestRisk.criticalFailureRate + '%.');
+    }
+    if (data.topRootCause) {
+      lines.push('The leading root cause business-wide is ' + data.topRootCause.rootCause + '.');
+    }
+    return lines.join(' ');
   }
 
   // Creates one Weekly Review (a Performance Log record) from 3-5 individual
@@ -2873,6 +3796,7 @@ var Tracker = (function () {
     createNewTemplateVersion: createNewTemplateVersion,
     searchAudits: searchAudits,
     getSearchFilterOptions: getSearchFilterOptions,
+    generateReport: generateReport,
     saveWeeklyReview: saveWeeklyReview
   };
 })();
