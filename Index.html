@@ -304,6 +304,14 @@
     padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 12.5px;
   }
 
+  .action-item-row {
+    display: grid; grid-template-columns: 2fr 1fr 1fr auto auto; gap: 8px; align-items: center;
+    padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 6px; background: var(--surface);
+  }
+  .action-item-row input[type="text"], .action-item-row input[type="date"] {
+    padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 12.5px; width: 100%;
+  }
+
   /* ---------- Stream cards (existing) ---------- */
 
   .root-cause-row {
@@ -510,6 +518,12 @@
       </button>
       <button class="nav-item" data-page="reports">
         <span class="nav-icon">&#8862;</span> Reports
+      </button>
+      <button class="nav-item" data-page="knowledge-base">
+        <span class="nav-icon">&#128218;</span> Knowledge Base
+      </button>
+      <button class="nav-item" data-page="coaching">
+        <span class="nav-icon">&#127919;</span> Coaching
       </button>
       <button class="nav-item" data-page="settings">
         <span class="nav-icon">&#9881;</span> Settings
@@ -769,6 +783,167 @@
       <div id="reportOutputShell"></div>
     </section>
 
+    <!-- KNOWLEDGE BASE PAGE -->
+    <section class="page-view" data-page-view="knowledge-base" id="page-knowledge-base">
+      <div class="breadcrumbs" id="kbBreadcrumbs"></div>
+      <div class="page-header">
+        <div>
+          <h1 id="kbTitle">Knowledge Base</h1>
+          <p id="kbSubtitle">SOPs, policies, coaching guides, and quick reference material - linked directly to the departments, scorecards, and criteria they apply to.</p>
+        </div>
+        <button class="btn btn-primary" id="addArticleButton">+ New Article</button>
+      </div>
+      <div id="kbContent"></div>
+    </section>
+
+    <!-- Knowledge Base article add/edit modal -->
+    <div id="articleModalBackdrop" class="modal-backdrop">
+      <div class="modal" style="width: min(760px, 100%);">
+        <div class="modal-header">
+          <h2 id="articleModalTitle">New Article</h2>
+          <button class="btn btn-secondary btn-sm" id="closeArticleModalButton" type="button">Close</button>
+        </div>
+        <form id="articleForm">
+          <div class="modal-body">
+            <div class="form-grid">
+              <div class="field-group"><label>Title</label><input type="text" id="articleFieldTitle"></div>
+              <div class="field-group">
+                <label>Category</label>
+                <select id="articleFieldCategory"></select>
+              </div>
+              <div class="field-group">
+                <label>Status</label>
+                <select id="articleFieldStatus">
+                  <option value="Draft">Draft</option>
+                  <option value="Published">Published</option>
+                  <option value="Archived">Archived</option>
+                </select>
+              </div>
+              <div class="field-group"><label>Author</label><input type="text" id="articleFieldAuthor"></div>
+              <div class="field-group"><label>Tags (comma-separated)</label><input type="text" id="articleFieldTags" placeholder="e.g. empathy, tone, greeting"></div>
+            </div>
+
+            <div class="field-group" style="margin-top: var(--space-3);">
+              <label>Departments</label>
+              <div class="criteria-checklist" id="articleDepartmentChecklist"></div>
+            </div>
+            <div class="field-group" style="margin-top: var(--space-3);">
+              <label>Scorecard Templates</label>
+              <div class="criteria-checklist" id="articleTemplateChecklist"></div>
+            </div>
+            <div class="field-group" style="margin-top: var(--space-3);">
+              <label>Linked Criteria (surfaces this article wherever these criteria appear)</label>
+              <div class="criteria-checklist" id="articleCriteriaChecklist"></div>
+            </div>
+
+            <div class="field-group" style="margin-top: var(--space-3);"><label>Purpose</label><textarea id="articleFieldPurpose"></textarea></div>
+            <div class="field-group" style="margin-top: var(--space-3);"><label>Policy</label><textarea id="articleFieldPolicy"></textarea></div>
+            <div class="field-group" style="margin-top: var(--space-3);"><label>Procedure</label><textarea id="articleFieldProcedure"></textarea></div>
+            <div class="field-group" style="margin-top: var(--space-3);"><label>Examples</label><textarea id="articleFieldExamples"></textarea></div>
+            <div class="field-group" style="margin-top: var(--space-3);"><label>Common Mistakes</label><textarea id="articleFieldCommonMistakes"></textarea></div>
+            <div class="field-group" style="margin-top: var(--space-3);"><label>QA Coaching Notes</label><textarea id="articleFieldCoachingNotes"></textarea></div>
+            <div class="field-group" style="margin-top: var(--space-3);">
+              <label>Related Articles</label>
+              <div class="criteria-checklist" id="articleRelatedChecklist"></div>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" type="button" id="cancelArticleModalButton">Cancel</button>
+            <button class="btn btn-primary" type="submit" id="saveArticleButton">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- COACHING PAGE -->
+    <section class="page-view" data-page-view="coaching" id="page-coaching">
+      <div class="breadcrumbs" id="coachingBreadcrumbs"></div>
+      <div class="page-header">
+        <div>
+          <h1 id="coachingTitle">Coaching</h1>
+          <p id="coachingSubtitle">The full coaching lifecycle: audit, coach, follow up, re-audit, measure improvement.</p>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-secondary" id="viewCoachingListButton">All Sessions</button>
+          <button class="btn btn-secondary" id="viewCoachingDashboardButton">Dashboard</button>
+          <button class="btn btn-primary" id="newCoachingSessionButton">+ New Session</button>
+        </div>
+      </div>
+      <div id="coachingContent"></div>
+    </section>
+
+    <!-- Coaching session create/edit modal -->
+    <div id="coachingModalBackdrop" class="modal-backdrop">
+      <div class="modal" style="width: min(820px, 100%);">
+        <div class="modal-header">
+          <h2 id="coachingModalTitle">New Coaching Session</h2>
+          <button class="btn btn-secondary btn-sm" id="closeCoachingModalButton" type="button">Close</button>
+        </div>
+        <form id="coachingForm">
+          <div class="modal-body">
+            <div class="form-grid">
+              <div class="field-group">
+                <label>Department</label>
+                <select id="coachingFieldDepartment"><option value="">Select a department</option></select>
+              </div>
+              <div class="field-group">
+                <label>Agent</label>
+                <select id="coachingFieldAgent" disabled><option value="">Select an agent</option></select>
+              </div>
+              <div class="field-group"><label>Coach</label><input type="text" id="coachingFieldCoach"></div>
+              <div class="field-group">
+                <label>Coaching Type</label>
+                <select id="coachingFieldType"></select>
+              </div>
+              <div class="field-group">
+                <label>Status</label>
+                <select id="coachingFieldStatus"></select>
+              </div>
+              <div class="field-group">
+                <label>Priority</label>
+                <select id="coachingFieldPriority"></select>
+              </div>
+            </div>
+
+            <div class="card" style="padding: var(--space-3); margin: var(--space-3) 0; background: var(--surface-alt);">
+              <div class="form-grid">
+                <div class="field-group"><label>Link to Audit ID (optional)</label><input type="text" id="coachingFieldAuditId" placeholder="Detail ID or Interaction ID"></div>
+                <div style="display:flex; align-items:flex-end;"><button type="button" class="btn btn-secondary btn-sm" id="loadAuditContextButton">Load Audit Context</button></div>
+              </div>
+              <div id="auditContextPreview" style="margin-top: var(--space-2); font-size: 12px; color: var(--text-muted);"></div>
+            </div>
+
+            <div class="field-group"><label>Goal</label><input type="text" id="coachingFieldGoal"></div>
+            <div class="field-group" style="margin-top: var(--space-3);"><label>Summary</label><textarea id="coachingFieldSummary"></textarea></div>
+            <div class="field-group" style="margin-top: var(--space-3);"><label>Strengths</label><textarea id="coachingFieldStrengths"></textarea></div>
+            <div class="field-group" style="margin-top: var(--space-3);"><label>Development Areas</label><textarea id="coachingFieldDevelopmentAreas"></textarea></div>
+
+            <div style="margin-top: var(--space-3);">
+              <label style="font-size:12.5px; font-weight:600; color: var(--text-muted);">Action Plan</label>
+              <div id="actionPlanEditorRows"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="addActionItemButton" style="margin-top:6px;">+ Add Action Item</button>
+            </div>
+
+            <div class="form-grid" style="margin-top: var(--space-3);">
+              <div class="field-group"><label>Success Measure</label><input type="text" id="coachingFieldSuccessMeasure"></div>
+              <div class="field-group"><label>Due Date</label><input type="date" id="coachingFieldDueDate"></div>
+              <div class="field-group"><label>Follow-up Date</label><input type="date" id="coachingFieldFollowUpDate"></div>
+              <div class="field-group"><label>Re-audit Date</label><input type="date" id="coachingFieldReAuditDate"></div>
+              <div class="field-group"><label>Completion Date</label><input type="date" id="coachingFieldCompletionDate"></div>
+              <div class="field-group"><label>Next Review</label><input type="date" id="coachingFieldNextReview"></div>
+            </div>
+
+            <div class="field-group" style="margin-top: var(--space-3);"><label>Manager Notes</label><textarea id="coachingFieldManagerNotes"></textarea></div>
+            <div class="field-group" style="margin-top: var(--space-3);"><label>Employee Comments</label><textarea id="coachingFieldEmployeeComments"></textarea></div>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" type="button" id="cancelCoachingModalButton">Cancel</button>
+            <button class="btn btn-primary" type="submit" id="saveCoachingModalButton">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <!-- SETTINGS PAGE -->
     <section class="page-view" data-page-view="settings" id="page-settings">
       <div class="page-header">
@@ -972,6 +1147,17 @@
     searchFilterOptionsLoaded: false,
     searchFilterOptions: null,
     searchResultsCache: [],
+    kbView: 'homepage',
+    kbCurrentCategory: '',
+    kbCurrentArticleId: '',
+    kbArticlesCache: [],
+    kbEditingArticleId: '',
+    coachingView: 'dashboard',
+    coachingSessionsCache: [],
+    coachingOffset: 0,
+    coachingEditingId: '',
+    coachingActionPlanItems: [],
+    coachingContextAgentId: '',
     activeFormType: '',
     modalContext: null           // { agentId, name } when Add is launched with a known agent
   };
@@ -1043,6 +1229,27 @@
       if (event.target.id === 'auditDetailModalBackdrop') { closeAuditDetailModal(); }
     });
 
+    document.getElementById('addArticleButton').addEventListener('click', function () { openArticleModal(null); });
+    document.getElementById('closeArticleModalButton').addEventListener('click', closeArticleModal);
+    document.getElementById('cancelArticleModalButton').addEventListener('click', closeArticleModal);
+    document.getElementById('articleForm').addEventListener('submit', handleArticleFormSubmit);
+    document.getElementById('articleModalBackdrop').addEventListener('click', function (event) {
+      if (event.target.id === 'articleModalBackdrop') { closeArticleModal(); }
+    });
+
+    document.getElementById('viewCoachingDashboardButton').addEventListener('click', loadCoachingDashboard);
+    document.getElementById('viewCoachingListButton').addEventListener('click', function () { loadCoachingList({}); });
+    document.getElementById('newCoachingSessionButton').addEventListener('click', function () { openCoachingModal(null, null); });
+    document.getElementById('closeCoachingModalButton').addEventListener('click', closeCoachingModal);
+    document.getElementById('cancelCoachingModalButton').addEventListener('click', closeCoachingModal);
+    document.getElementById('coachingForm').addEventListener('submit', handleCoachingFormSubmit);
+    document.getElementById('coachingModalBackdrop').addEventListener('click', function (event) {
+      if (event.target.id === 'coachingModalBackdrop') { closeCoachingModal(); }
+    });
+    document.getElementById('coachingFieldDepartment').addEventListener('change', handleCoachingDepartmentChange);
+    document.getElementById('loadAuditContextButton').addEventListener('click', handleLoadAuditContext);
+    document.getElementById('addActionItemButton').addEventListener('click', function () { addActionPlanItem(null); });
+
     document.getElementById('coachingSearchInput').addEventListener('input', function (e) {
       renderLogTable('coaching', e.target.value);
     });
@@ -1083,6 +1290,8 @@
     if (pageName === 'search' && !appState.searchFilterOptionsLoaded) { loadSearchFilterOptions(); }
     if (pageName === 'reports' && !appState.searchFilterOptionsLoaded) { loadSearchFilterOptions(); }
     if (pageName === 'reports' && appState.searchFilterOptionsLoaded) { loadReportPickerOptions(); }
+    if (pageName === 'knowledge-base') { loadKnowledgeBaseHomepage(); }
+    if (pageName === 'coaching') { loadCoachingDashboard(); }
   }
 
   // ===========================================================================
@@ -2999,6 +3208,354 @@
     document.getElementById('cancelModalButton').disabled = isSaving;
     document.getElementById('closeModalButton').disabled = isSaving;
     document.getElementById('saveModalButton').textContent = isSaving ? 'Saving...' : 'Save';
+  }
+
+  // ===========================================================================
+  // KNOWLEDGE BASE MODULE (Phase A: data model + basic CRUD + homepage)
+  // Article lists load only summary fields; full body sections are fetched
+  // only when an article is actually opened (getArticleById), per the
+  // "load lists efficiently" requirement. Criterion Integration (surfacing
+  // articles next to failed criteria elsewhere in the app) and the full
+  // rich-text editor/versioning workflow are later phases.
+  // ===========================================================================
+
+  function loadKnowledgeBaseHomepage() {
+    appState.kbView = 'homepage';
+    document.getElementById('kbBreadcrumbs').innerHTML = '';
+    document.getElementById('kbTitle').textContent = 'Knowledge Base';
+    document.getElementById('kbSubtitle').textContent = 'SOPs, policies, coaching guides, and quick reference material - linked directly to the departments, scorecards, and criteria they apply to.';
+
+    document.getElementById('kbContent').innerHTML = '<div class="empty-state">Loading...</div>';
+    callServer('getKnowledgeBaseHomepage', undefined, function (result) {
+      renderKbHomepage(result.categories || []);
+    });
+  }
+
+  function renderKbHomepage(categories) {
+    var cardsHtml = categories.map(function (c) {
+      return (
+        '<div class="card dept-card" data-open-kb-category="' + escapeAttribute(c.category) + '">' +
+          '<h3>' + escapeHtml(c.category) + '</h3>' +
+          '<div class="dept-meta">' +
+            '<span>Articles <strong>' + c.articleCount + '</strong></span>' +
+            '<span>Last Updated <strong>' + escapeHtml(c.lastUpdated || 'N/A') + '</strong></span>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+
+    document.getElementById('kbContent').innerHTML =
+      '<div class="table-toolbar" style="margin-bottom: var(--space-5);">' +
+        '<input type="text" id="kbSearchInput" placeholder="Search articles by title, tag, or criterion...">' +
+        '<button class="btn btn-secondary btn-sm" id="kbSearchButton">Search</button>' +
+      '</div>' +
+      '<div class="list-grid">' + cardsHtml + '</div>';
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-open-kb-category]')).forEach(function (card) {
+      card.addEventListener('click', function () { openKbCategory(card.getAttribute('data-open-kb-category')); });
+    });
+    document.getElementById('kbSearchButton').addEventListener('click', function () {
+      openKbSearch(document.getElementById('kbSearchInput').value.trim());
+    });
+    document.getElementById('kbSearchInput').addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') { openKbSearch(event.target.value.trim()); }
+    });
+  }
+
+  function openKbCategory(category) {
+    appState.kbView = 'list';
+    appState.kbCurrentCategory = category;
+    document.getElementById('kbTitle').textContent = category;
+    document.getElementById('kbSubtitle').textContent = 'Published and draft articles in this category.';
+    document.getElementById('kbBreadcrumbs').innerHTML =
+      '<button data-kb-crumb="homepage">Knowledge Base</button><span class="crumb-sep">/</span><span class="crumb-current">' + escapeHtml(category) + '</span>';
+    bindKbBreadcrumbs();
+
+    document.getElementById('kbContent').innerHTML = '<div class="empty-state">Loading...</div>';
+    callServer('getKnowledgeBaseArticles', { category: category }, function (result) {
+      appState.kbArticlesCache = result.articles || [];
+      renderKbArticleList(appState.kbArticlesCache, category);
+    });
+  }
+
+  function openKbSearch(searchText) {
+    appState.kbView = 'list';
+    appState.kbCurrentCategory = '';
+    document.getElementById('kbTitle').textContent = 'Search Results';
+    document.getElementById('kbSubtitle').textContent = 'Articles matching "' + searchText + '".';
+    document.getElementById('kbBreadcrumbs').innerHTML =
+      '<button data-kb-crumb="homepage">Knowledge Base</button><span class="crumb-sep">/</span><span class="crumb-current">Search</span>';
+    bindKbBreadcrumbs();
+
+    document.getElementById('kbContent').innerHTML = '<div class="empty-state">Searching...</div>';
+    callServer('getKnowledgeBaseArticles', { searchText: searchText }, function (result) {
+      appState.kbArticlesCache = result.articles || [];
+      renderKbArticleList(appState.kbArticlesCache);
+    });
+  }
+
+  function bindKbBreadcrumbs() {
+    Array.prototype.slice.call(document.querySelectorAll('[data-kb-crumb]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        if (button.getAttribute('data-kb-crumb') === 'homepage') { loadKnowledgeBaseHomepage(); }
+      });
+    });
+  }
+
+  function renderKbArticleList(articles) {
+    if (!articles.length) {
+      document.getElementById('kbContent').innerHTML = '<div class="table-shell"><div class="empty-state">No articles found.</div></div>';
+      return;
+    }
+
+    var rows = articles.map(function (a) {
+      var statusBadgeType = a.status.toLowerCase() === 'published' ? 'success' : (a.status.toLowerCase() === 'archived' ? 'neutral' : 'warning');
+      return (
+        '<tr data-open-kb-article="' + escapeAttribute(a.articleId) + '" style="cursor:pointer;">' +
+          '<td>' + escapeHtml(a.title) + '</td>' +
+          '<td>' + escapeHtml(a.category) + '</td>' +
+          '<td><span class="badge ' + statusBadgeType + '">' + escapeHtml(a.status) + '</span></td>' +
+          '<td>v' + escapeHtml(a.version) + '</td>' +
+          '<td>' + escapeHtml(a.tags.join(', ')) + '</td>' +
+          '<td>' + escapeHtml(a.updatedDate) + '</td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    document.getElementById('kbContent').innerHTML =
+      '<div class="table-shell"><table><thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Version</th><th>Tags</th><th>Updated</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-open-kb-article]')).forEach(function (row) {
+      row.addEventListener('click', function () { openKbArticle(row.getAttribute('data-open-kb-article')); });
+    });
+  }
+
+  function openKbArticle(articleId) {
+    document.getElementById('kbContent').innerHTML = '<div class="empty-state">Loading article...</div>';
+    callServer('getArticleById', articleId, function (result) {
+      appState.kbView = 'article';
+      appState.kbCurrentArticleId = articleId;
+      renderKbArticleViewer(result.article);
+    });
+  }
+
+  function renderKbArticleViewer(article) {
+    document.getElementById('kbTitle').textContent = article.title;
+    document.getElementById('kbSubtitle').textContent = article.category;
+    document.getElementById('kbBreadcrumbs').innerHTML =
+      '<button data-kb-crumb="homepage">Knowledge Base</button><span class="crumb-sep">/</span>' +
+      (appState.kbCurrentCategory ? '<button data-kb-crumb="category">' + escapeHtml(appState.kbCurrentCategory) + '</button><span class="crumb-sep">/</span>' : '') +
+      '<span class="crumb-current">' + escapeHtml(article.title) + '</span>';
+    bindKbBreadcrumbs();
+    var categoryCrumb = document.querySelector('[data-kb-crumb="category"]');
+    if (categoryCrumb) {
+      categoryCrumb.addEventListener('click', function () { openKbCategory(appState.kbCurrentCategory); });
+    }
+
+    var statusBadgeType = article.status.toLowerCase() === 'published' ? 'success' : (article.status.toLowerCase() === 'archived' ? 'neutral' : 'warning');
+
+    var metaHtml =
+      '<div class="profile-meta-grid" style="margin-bottom: var(--space-4);">' +
+        metaHtmlItem('Category', article.category) +
+        metaHtmlItem('Status', article.status) +
+        metaHtmlItem('Version', 'v' + article.version) +
+        metaHtmlItem('Author', article.author) +
+        metaHtmlItem('Created', article.createdDate) +
+        metaHtmlItem('Updated', article.updatedDate) +
+        metaHtmlItem('Departments', article.departmentNames.join(', ')) +
+        metaHtmlItem('Linked Criteria', article.criteria.join(', ')) +
+      '</div>' +
+      (article.tags.length ? '<div class="tag-chip-row" style="margin-bottom: var(--space-4);">' + article.tags.map(function (t) { return '<span class="tag-chip">' + escapeHtml(t) + '</span>'; }).join('') + '</div>' : '');
+
+    function sectionBlock(label, content) {
+      if (!content) { return ''; }
+      return '<div style="margin-bottom: var(--space-4);"><strong style="font-size:12.5px;">' + escapeHtml(label) + '</strong><p style="margin:6px 0 0; font-size:13.5px; color: var(--text-muted); white-space:pre-wrap;">' + escapeHtml(content) + '</p></div>';
+    }
+
+    var bodyHtml =
+      sectionBlock('Purpose', article.purpose) +
+      sectionBlock('Policy', article.policy) +
+      sectionBlock('Procedure', article.procedure) +
+      sectionBlock('Examples', article.examples) +
+      sectionBlock('Common Mistakes', article.commonMistakes) +
+      sectionBlock('QA Coaching Notes', article.coachingNotes);
+
+    var relatedHtml = article.relatedArticles.length
+      ? '<div class="tag-chip-row">' + article.relatedArticles.map(function (r) {
+          return '<span class="tag-chip" style="cursor:pointer;" data-open-related-article="' + escapeAttribute(r.articleId) + '">' + escapeHtml(r.title) + '</span>';
+        }).join('') + '</div>'
+      : '<div class="empty-state">No related articles linked.</div>';
+
+    document.getElementById('kbContent').innerHTML =
+      '<div style="display:flex; gap: var(--space-3); margin-bottom: var(--space-4);">' +
+        '<span class="badge ' + statusBadgeType + '">' + escapeHtml(article.status) + '</span>' +
+        '<button class="btn btn-secondary btn-sm" id="editArticleButton">Edit</button>' +
+        (article.status.toLowerCase() !== 'published' ? '<button class="btn btn-secondary btn-sm" id="publishArticleButton">Publish</button>' : '') +
+        (article.status.toLowerCase() !== 'archived' ? '<button class="btn btn-secondary btn-sm" id="archiveArticleButton">Archive</button>' : '') +
+        '<button class="btn btn-secondary btn-sm" onclick="window.print()">Print</button>' +
+        '<button class="btn btn-secondary btn-sm" id="copyArticleLinkButton">Copy Link</button>' +
+      '</div>' +
+      '<div class="card review-panel" style="margin-bottom: var(--space-4);">' + metaHtml + bodyHtml + '</div>' +
+      reportSection('Related Articles', relatedHtml);
+
+    document.getElementById('editArticleButton').addEventListener('click', function () { openArticleModal(article); });
+    var publishBtn = document.getElementById('publishArticleButton');
+    if (publishBtn) { publishBtn.addEventListener('click', function () { setKbArticleStatus(article.articleId, 'Published'); }); }
+    var archiveBtn = document.getElementById('archiveArticleButton');
+    if (archiveBtn) { archiveBtn.addEventListener('click', function () { setKbArticleStatus(article.articleId, 'Archived'); }); }
+    document.getElementById('copyArticleLinkButton').addEventListener('click', function () { copyArticleLink(article.articleId); });
+    Array.prototype.slice.call(document.querySelectorAll('[data-open-related-article]')).forEach(function (chip) {
+      chip.addEventListener('click', function () { openKbArticle(chip.getAttribute('data-open-related-article')); });
+    });
+  }
+
+  function setKbArticleStatus(articleId, status) {
+    showStatus('Updating status...', 'info');
+    callServer('setArticleStatus', [articleId, status], function (result) {
+      showStatus(result.message || 'Status updated.', 'success');
+      openKbArticle(articleId);
+    });
+  }
+
+  function copyArticleLink(articleId) {
+    var url = window.location.href.split('#')[0] + '#article=' + articleId;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url);
+      showStatus('Link copied.', 'success');
+    } else {
+      window.prompt('Copy this link:', url);
+    }
+  }
+
+  // ---- Add/Edit Article modal -----------------------------------------
+
+  function openArticleModal(existingArticle) {
+    appState.kbEditingArticleId = existingArticle ? existingArticle.articleId : '';
+    document.getElementById('articleModalTitle').textContent = existingArticle ? 'Edit Article' : 'New Article';
+    document.getElementById('articleForm').reset();
+
+    var categorySelect = document.getElementById('articleFieldCategory');
+    categorySelect.innerHTML = KB_CATEGORY_LIST.map(function (c) { return '<option value="' + escapeAttribute(c) + '">' + escapeHtml(c) + '</option>'; }).join('');
+
+    populateArticleChecklists(existingArticle, function () {
+      if (existingArticle) {
+        document.getElementById('articleFieldTitle').value = existingArticle.title;
+        categorySelect.value = existingArticle.category;
+        document.getElementById('articleFieldStatus').value = existingArticle.status || 'Draft';
+        document.getElementById('articleFieldAuthor').value = existingArticle.author || '';
+        document.getElementById('articleFieldTags').value = (existingArticle.tags || []).join(', ');
+        document.getElementById('articleFieldPurpose').value = existingArticle.purpose || '';
+        document.getElementById('articleFieldPolicy').value = existingArticle.policy || '';
+        document.getElementById('articleFieldProcedure').value = existingArticle.procedure || '';
+        document.getElementById('articleFieldExamples').value = existingArticle.examples || '';
+        document.getElementById('articleFieldCommonMistakes').value = existingArticle.commonMistakes || '';
+        document.getElementById('articleFieldCoachingNotes').value = existingArticle.coachingNotes || '';
+      }
+      document.getElementById('articleModalBackdrop').classList.add('open');
+    });
+  }
+
+  var KB_CATEGORY_LIST = ['SOPs', 'Policies', 'Coaching Guides', 'Quick Reference Guides', 'FAQs', 'Best Practices', 'Release Notes'];
+
+  function populateArticleChecklists(existingArticle, onReady) {
+    var departments = (appState.initialData && appState.initialData.departments) || [];
+    fillChecklist('articleDepartmentChecklist', departments.map(function (d) { return { value: d.departmentId, label: d.departmentName }; }),
+      existingArticle ? existingArticle.departmentIds : []);
+
+    var criteriaNames = (appState.searchFilterOptions && appState.searchFilterOptions.criteria) || [];
+    var kbArticles = appState.kbArticlesCache || [];
+
+    function finish() {
+      fillChecklist('articleTemplateChecklist', (appState.allTemplatesCache || []).map(function (t) { return { value: t.templateId, label: t.templateName + ' v' + t.version }; }),
+        existingArticle ? existingArticle.templateIds : []);
+      fillChecklist('articleCriteriaChecklist', criteriaNames.map(function (c) { return { value: c, label: c }; }),
+        existingArticle ? existingArticle.criteria : []);
+      fillChecklist('articleRelatedChecklist', kbArticles.filter(function (a) { return !existingArticle || a.articleId !== existingArticle.articleId; }).map(function (a) { return { value: a.articleId, label: a.title }; }),
+        existingArticle ? existingArticle.relatedArticles.map(function (r) { return r.articleId; }) : []);
+      onReady();
+    }
+
+    if (!appState.searchFilterOptionsLoaded || !appState.allTemplatesCache.length) {
+      callServer('getSearchFilterOptions', undefined, function (result) {
+        appState.searchFilterOptions = result;
+        appState.searchFilterOptionsLoaded = true;
+        criteriaNames = result.criteria || [];
+        callServer('getAllScorecardTemplates', undefined, function (templateResult) {
+          appState.allTemplatesCache = templateResult.templates || [];
+          finish();
+        });
+      });
+    } else {
+      finish();
+    }
+  }
+
+  function fillChecklist(containerId, items, selectedValues) {
+    var container = document.getElementById(containerId);
+    var selected = selectedValues || [];
+    if (!items.length) {
+      container.innerHTML = '<div class="empty-state">None available yet.</div>';
+      return;
+    }
+    container.innerHTML = items.map(function (item) {
+      var isChecked = selected.indexOf(item.value) !== -1;
+      return '<label><input type="checkbox" value="' + escapeAttribute(item.value) + '"' + (isChecked ? ' checked' : '') + '> ' + escapeHtml(item.label) + '</label>';
+    }).join('');
+  }
+
+  function getChecklistValues(containerId) {
+    return Array.prototype.slice.call(document.querySelectorAll('#' + containerId + ' input[type="checkbox"]:checked')).map(function (cb) { return cb.value; });
+  }
+
+  function closeArticleModal() {
+    appState.kbEditingArticleId = '';
+    document.getElementById('articleForm').reset();
+    document.getElementById('articleModalBackdrop').classList.remove('open');
+  }
+
+  function handleArticleFormSubmit(event) {
+    event.preventDefault();
+
+    var title = document.getElementById('articleFieldTitle').value.trim();
+    if (!title) {
+      showStatus('Title is required.', 'error');
+      return;
+    }
+
+    var values = {
+      'Title': title,
+      'Category': document.getElementById('articleFieldCategory').value,
+      'Status': document.getElementById('articleFieldStatus').value,
+      'Author': document.getElementById('articleFieldAuthor').value,
+      'Tags': document.getElementById('articleFieldTags').value,
+      'Department IDs': getChecklistValues('articleDepartmentChecklist').join(', '),
+      'Template IDs': getChecklistValues('articleTemplateChecklist').join(', '),
+      'Criteria': getChecklistValues('articleCriteriaChecklist').join(', '),
+      'Related Article IDs': getChecklistValues('articleRelatedChecklist').join(', '),
+      'Purpose': document.getElementById('articleFieldPurpose').value,
+      'Policy': document.getElementById('articleFieldPolicy').value,
+      'Procedure': document.getElementById('articleFieldProcedure').value,
+      'Examples': document.getElementById('articleFieldExamples').value,
+      'Common Mistakes': document.getElementById('articleFieldCommonMistakes').value,
+      'QA Coaching Notes': document.getElementById('articleFieldCoachingNotes').value
+    };
+
+    var saveButton = document.getElementById('saveArticleButton');
+    saveButton.disabled = true;
+
+    if (appState.kbEditingArticleId) {
+      callServer('updateArticle', [appState.kbEditingArticleId, { values: values }], function (result) {
+        closeArticleModal();
+        showStatus(result.message || 'Article updated.', 'success');
+        openKbArticle(appState.kbEditingArticleId);
+      }, function () { saveButton.disabled = false; });
+    } else {
+      callServer('saveArticle', { values: values }, function (result) {
+        closeArticleModal();
+        showStatus(result.message || 'Article saved.', 'success');
+        openKbArticle(result.articleId);
+      }, function () { saveButton.disabled = false; });
+    }
   }
 
   // ===========================================================================

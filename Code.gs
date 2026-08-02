@@ -166,6 +166,84 @@ function generateReport(type, filters) {
   });
 }
 
+function getKnowledgeBaseHomepage() {
+  return runSafely(function () {
+    return Tracker.getKnowledgeBaseHomepage();
+  });
+}
+
+function getKnowledgeBaseArticles(filters) {
+  return runSafely(function () {
+    return Tracker.getKnowledgeBaseArticles(filters);
+  });
+}
+
+function getArticleById(articleId) {
+  return runSafely(function () {
+    return Tracker.getArticleById(articleId);
+  });
+}
+
+function getArticlesForCriterion(criterionName) {
+  return runSafely(function () {
+    return Tracker.getArticlesForCriterion(criterionName);
+  });
+}
+
+function saveArticle(payload) {
+  return runSafely(function () {
+    return Tracker.saveArticle(payload);
+  });
+}
+
+function updateArticle(articleId, payload) {
+  return runSafely(function () {
+    return Tracker.updateArticle(articleId, payload);
+  });
+}
+
+function setArticleStatus(articleId, status) {
+  return runSafely(function () {
+    return Tracker.setArticleStatus(articleId, status);
+  });
+}
+
+function getCoachingSessions(filters) {
+  return runSafely(function () {
+    return Tracker.getCoachingSessions(filters);
+  });
+}
+
+function getCoachingSessionById(coachingId) {
+  return runSafely(function () {
+    return Tracker.getCoachingSessionById(coachingId);
+  });
+}
+
+function getCoachingContextFromAudit(auditId) {
+  return runSafely(function () {
+    return Tracker.getCoachingContextFromAudit(auditId);
+  });
+}
+
+function saveCoachingActionPlan(coachingId, actionItems) {
+  return runSafely(function () {
+    return Tracker.saveCoachingActionPlan(coachingId, actionItems);
+  });
+}
+
+function updateCoaching(coachingId, payload) {
+  return runSafely(function () {
+    return Tracker.updateCoaching(coachingId, payload);
+  });
+}
+
+function getCoachingDashboard() {
+  return runSafely(function () {
+    return Tracker.getCoachingDashboard();
+  });
+}
+
 function saveWeeklyReview(payload) {
   return runSafely(function () {
     return Tracker.saveWeeklyReview(payload);
