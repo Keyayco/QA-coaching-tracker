@@ -1196,7 +1196,7 @@
     });
 
     document.getElementById('addCoachingFromListButton').addEventListener('click', function () {
-      openModal('coaching', null);
+      openCoachingModal(null, null);
     });
     document.getElementById('addPerformanceFromListButton').addEventListener('click', function () {
       openModal('performance', null);
@@ -1877,7 +1877,13 @@
       button.addEventListener('click', function () {
         var agentResult = appState.agentCache[appState.dashboardAgentId];
         var agent = agentResult ? agentResult.agent : null;
-        openModal(button.getAttribute('data-quick-add'), agent ? { agentId: agent.agentId, name: agent.name } : null);
+        var formType = button.getAttribute('data-quick-add');
+
+        if (formType === 'coaching') {
+          openCoachingModal(null, agent ? { agentId: agent.agentId, departmentId: agent.departmentId } : null);
+          return;
+        }
+        openModal(formType, agent ? { agentId: agent.agentId, name: agent.name } : null);
       });
     });
 
@@ -2981,7 +2987,14 @@
       '</div>' +
       '<div style="margin-bottom: var(--space-4);"><strong style="font-size:12.5px;">Failed Criteria</strong><div style="margin-top:6px;">' + failedCriteriaHtml + '</div></div>' +
       '<div><strong style="font-size:12.5px;">Comments</strong><p style="font-size:13px; color: var(--text-muted); margin: 6px 0 0;">' + escapeHtml(record.comments || 'None') + '</p></div>' +
-      (!record.templateResolved ? '<p style="font-size:11.5px; color: var(--text-faint); margin-top: var(--space-4);">This audit\u2019s Scorecard Template could not be determined from department + effective dates, so Parameter/Attribute/Critical classification may be incomplete.</p>' : '');
+      (!record.templateResolved ? '<p style="font-size:11.5px; color: var(--text-faint); margin-top: var(--space-4);">This audit\u2019s Scorecard Template could not be determined from department + effective dates, so Parameter/Attribute/Critical classification may be incomplete.</p>' : '') +
+      '<div style="margin-top: var(--space-4);"><button type="button" class="btn btn-secondary btn-sm" id="createCoachingFromSearchButton">+ Create Coaching Session</button></div>';
+
+    document.getElementById('createCoachingFromSearchButton').addEventListener('click', function () {
+      closeAuditDetailModal();
+      switchPage('coaching');
+      openCoachingModal(null, { auditId: record.detailId, agentId: record.agentId, departmentId: record.departmentId });
+    });
 
     document.getElementById('auditDetailModalBackdrop').classList.add('open');
   }
@@ -3559,6 +3572,399 @@
   }
 
   // ===========================================================================
+  // COACHING MODULE
+  // Dashboard/list/detail all read from getCoachingSessions/
+  // getCoachingSessionById - no client-side recomputation of anything the
+  // backend already calculated. Chart rendering reuses the Charts module
+  // below (buildBarChartSvg, buildLineChartSvg) rather than a separate
+  // implementation.
+  // ===========================================================================
+
+  function mergeFilters(base, overrides) {
+    var merged = {};
+    Object.keys(base || {}).forEach(function (key) { merged[key] = base[key]; });
+    Object.keys(overrides || {}).forEach(function (key) { merged[key] = overrides[key]; });
+    return merged;
+  }
+
+  function loadCoachingDashboard() {
+    appState.coachingView = 'dashboard';
+    document.getElementById('coachingBreadcrumbs').innerHTML = '';
+    document.getElementById('coachingTitle').textContent = 'Coaching Dashboard';
+    document.getElementById('coachingContent').innerHTML = '<div class="empty-state">Loading...</div>';
+
+    callServer('getCoachingDashboard', undefined, function (result) {
+      renderCoachingDashboard(result);
+    });
+  }
+
+  function renderCoachingDashboard(d) {
+    var kpis = reportKpiGrid([
+      { label: 'Open Sessions', value: d.openSessionsCount },
+      { label: 'Completed This Month', value: d.completedThisMonthCount },
+      { label: 'Overdue', value: d.overdueCount },
+      { label: 'Agents Being Coached', value: d.agentsCurrentlyCoachedCount },
+      { label: 'Avg Improvement After Coaching', value: d.averageImprovementAfterCoaching !== null ? (d.averageImprovementAfterCoaching > 0 ? '+' : '') + d.averageImprovementAfterCoaching + '%' : 'N/A' },
+      { label: 'Completion Rate', value: d.completionRate !== null ? d.completionRate + '%' : 'N/A' }
+    ]);
+
+    var devAreasChart = d.mostCommonDevelopmentAreas.length
+      ? buildBarChartSvg(d.mostCommonDevelopmentAreas.map(function (rc) { return { label: rc.rootCause, value: rc.count }; }))
+      : '<div class="chart-empty">No data yet.</div>';
+
+    var overdueRows = d.overdueSessions.map(function (s) {
+      return '<tr data-open-coaching-session="' + escapeAttribute(s.coachingId) + '" style="cursor:pointer;"><td>' + escapeHtml(s.agentName) + '</td><td>' + escapeHtml(s.status) + '</td><td>' + escapeHtml(s.followUpDate || s.dueDate) + '</td></tr>';
+    }).join('');
+    var followUpRows = d.upcomingFollowUps.map(function (s) {
+      return '<tr data-open-coaching-session="' + escapeAttribute(s.coachingId) + '" style="cursor:pointer;"><td>' + escapeHtml(s.agentName) + '</td><td>' + escapeHtml(s.coach) + '</td><td>' + escapeHtml(s.followUpDate) + '</td></tr>';
+    }).join('');
+
+    document.getElementById('coachingContent').innerHTML = kpis +
+      reportSection('Most Common Development Areas (agents currently in coaching)', devAreasChart) +
+      reportSection('Overdue Sessions', '<div class="table-shell"><table><thead><tr><th>Agent</th><th>Status</th><th>Due</th></tr></thead><tbody>' + (overdueRows || '<tr><td colspan="3" class="empty-state">None.</td></tr>') + '</tbody></table></div>') +
+      reportSection('Upcoming Follow-ups (next 14 days)', '<div class="table-shell"><table><thead><tr><th>Agent</th><th>Coach</th><th>Follow-up Date</th></tr></thead><tbody>' + (followUpRows || '<tr><td colspan="3" class="empty-state">None.</td></tr>') + '</tbody></table></div>');
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-open-coaching-session]')).forEach(function (row) {
+      row.addEventListener('click', function () { openCoachingSession(row.getAttribute('data-open-coaching-session')); });
+    });
+  }
+
+  function loadCoachingList(filters) {
+    appState.coachingView = 'list';
+    appState.coachingOffset = filters.offset || 0;
+    document.getElementById('coachingTitle').textContent = 'All Coaching Sessions';
+    document.getElementById('coachingBreadcrumbs').innerHTML = '<button data-coaching-crumb="dashboard">Coaching</button><span class="crumb-sep">/</span><span class="crumb-current">All Sessions</span>';
+    bindCoachingBreadcrumbs();
+
+    document.getElementById('coachingContent').innerHTML = '<div class="empty-state">Loading...</div>';
+    var requestFilters = Object.keys(filters).length ? filters : { limit: 25, offset: appState.coachingOffset };
+
+    callServer('getCoachingSessions', requestFilters, function (result) {
+      renderCoachingList(result, requestFilters);
+    });
+  }
+
+  function bindCoachingBreadcrumbs() {
+    Array.prototype.slice.call(document.querySelectorAll('[data-coaching-crumb]')).forEach(function (button) {
+      button.addEventListener('click', function () { loadCoachingDashboard(); });
+    });
+  }
+
+  function renderCoachingList(result, currentFilters) {
+    var sessions = result.sessions || [];
+    var rows = sessions.map(function (s) {
+      var statusBadge = s.isOverdue ? reportBadge('Overdue', 'danger') : reportBadge(s.status, s.status.toLowerCase() === 'completed' ? 'success' : 'warning');
+      return (
+        '<tr data-open-coaching-session="' + escapeAttribute(s.coachingId) + '" style="cursor:pointer;">' +
+          '<td>' + escapeHtml(s.agentName) + '</td>' +
+          '<td>' + escapeHtml(s.departmentName) + '</td>' +
+          '<td>' + escapeHtml(s.coach) + '</td>' +
+          '<td>' + statusBadge + '</td>' +
+          '<td>' + escapeHtml(s.priority) + '</td>' +
+          '<td>' + escapeHtml(s.sessionDate) + '</td>' +
+          '<td>' + escapeHtml(s.followUpDate || '') + '</td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    var offset = currentFilters.offset || 0;
+    var limit = currentFilters.limit || 25;
+    var pagerHtml =
+      '<div style="display:flex; justify-content:space-between; align-items:center; margin-top: var(--space-3);">' +
+        '<span style="font-size:12px; color: var(--text-muted);">' + (offset + 1) + '-' + Math.min(offset + limit, result.totalCount) + ' of ' + result.totalCount + '</span>' +
+        '<div style="display:flex; gap:8px;">' +
+          '<button class="btn btn-secondary btn-sm" id="coachingPrevPageButton"' + (offset <= 0 ? ' disabled' : '') + '>Previous</button>' +
+          '<button class="btn btn-secondary btn-sm" id="coachingNextPageButton"' + (offset + limit >= result.totalCount ? ' disabled' : '') + '>Next</button>' +
+        '</div>' +
+      '</div>';
+
+    document.getElementById('coachingContent').innerHTML =
+      '<div class="table-shell"><table><thead><tr><th>Agent</th><th>Department</th><th>Coach</th><th>Status</th><th>Priority</th><th>Session Date</th><th>Follow-up</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="7" class="empty-state">No coaching sessions found.</td></tr>') + '</tbody></table></div>' + pagerHtml;
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-open-coaching-session]')).forEach(function (row) {
+      row.addEventListener('click', function () { openCoachingSession(row.getAttribute('data-open-coaching-session')); });
+    });
+
+    var prevBtn = document.getElementById('coachingPrevPageButton');
+    var nextBtn = document.getElementById('coachingNextPageButton');
+    if (prevBtn) { prevBtn.addEventListener('click', function () { loadCoachingList(mergeFilters(currentFilters, { offset: Math.max(0, offset - limit) })); }); }
+    if (nextBtn) { nextBtn.addEventListener('click', function () { loadCoachingList(mergeFilters(currentFilters, { offset: offset + limit })); }); }
+  }
+
+  function openCoachingSession(coachingId) {
+    document.getElementById('coachingContent').innerHTML = '<div class="empty-state">Loading session...</div>';
+    callServer('getCoachingSessionById', coachingId, function (result) {
+      appState.coachingView = 'detail';
+      renderCoachingSessionDetail(result.session);
+    });
+  }
+
+  function renderCoachingSessionDetail(s) {
+    document.getElementById('coachingTitle').textContent = s.agentName + ' \u2014 Coaching Session';
+    document.getElementById('coachingSubtitle').textContent = s.goal || '';
+    document.getElementById('coachingBreadcrumbs').innerHTML =
+      '<button data-coaching-crumb="dashboard">Coaching</button><span class="crumb-sep">/</span><span class="crumb-current">' + escapeHtml(s.agentName) + '</span>';
+    bindCoachingBreadcrumbs();
+
+    var statusBadge = s.isOverdue ? reportBadge('Overdue', 'danger') : reportBadge(s.status, s.status.toLowerCase() === 'completed' ? 'success' : 'warning');
+
+    var metaHtml =
+      '<div class="profile-meta-grid" style="margin-bottom: var(--space-4);">' +
+        metaHtmlItem('Coach', s.coach) + metaHtmlItem('Department', s.departmentName) + metaHtmlItem('Team Leader', s.teamLeader) +
+        metaHtmlItem('Type', s.coachingType) + metaHtmlItem('Priority', s.priority) + metaHtmlItem('Session Date', s.sessionDate) +
+        metaHtmlItem('Follow-up', s.followUpDate) + metaHtmlItem('Re-audit', s.reAuditDate) + metaHtmlItem('Completed', s.completionDate) +
+      '</div>';
+
+    var recentPerfChart = s.recentPerformance && s.recentPerformance.length
+      ? buildLineChartSvg(s.recentPerformance.map(function (p) { return { label: p.periodLabel, value: p.averageScore }; }))
+      : '<div class="chart-empty">No performance history yet.</div>';
+
+    var auditHtml = s.linkedAudit
+      ? reportTable(['Field', 'Value'], [
+          ['Audit ID', escapeHtml(s.linkedAudit.detailId)],
+          ['Audit Date', escapeHtml(s.linkedAudit.auditDate)],
+          ['Score', formatScore(s.linkedAudit.score)],
+          ['Failed Criteria', escapeHtml(s.linkedAudit.failedCriteria.map(function (c) { return c.name; }).join(', '))],
+          ['Comments', escapeHtml(s.linkedAudit.comments)]
+        ])
+      : '<div class="empty-state">No audit linked to this session.</div>';
+
+    var actionPlanRows = (s.actionPlan || []).map(function (item) {
+      return [escapeHtml(item.description), escapeHtml(item.owner), escapeHtml(item.dueDate), item.completed ? reportBadge('Done', 'success') : reportBadge('Open', 'warning'), escapeHtml(item.notes || '')];
+    });
+
+    var timelineHtml = (s.statusTimeline || []).map(function (e) {
+      return '<div class="timeline-item"><div class="timeline-dot"></div><div class="timeline-body"><div class="timeline-meta">' + escapeHtml(e.date) + '</div><div class="timeline-title">' + escapeHtml(e.label) + '</div></div></div>';
+    }).join('') || '<div class="empty-state">No dated events yet.</div>';
+
+    document.getElementById('coachingContent').innerHTML =
+      '<div style="display:flex; gap:8px; margin-bottom: var(--space-4);">' + statusBadge + '<button class="btn btn-secondary btn-sm" id="editCoachingSessionButton">Edit</button></div>' +
+      '<div class="card review-panel" style="margin-bottom: var(--space-4);">' + metaHtml + '</div>' +
+      reportSection('Recent Performance', recentPerfChart) +
+      reportSection('Audit Summary', auditHtml) +
+      reportSection('Action Plan', reportTable(['Description', 'Owner', 'Due Date', 'Status', 'Notes'], actionPlanRows)) +
+      reportSection('Status Timeline', '<div class="timeline">' + timelineHtml + '</div>') +
+      reportSection('Notes', '<p style="font-size:13px;"><strong>Manager:</strong> ' + escapeHtml(s.managerNotes || 'None') + '</p><p style="font-size:13px;"><strong>Employee:</strong> ' + escapeHtml(s.employeeComments || 'None') + '</p>');
+
+    document.getElementById('editCoachingSessionButton').addEventListener('click', function () { openCoachingModal(s, null); });
+  }
+
+  // ---- Create/Edit modal ---------------------------------------------------
+
+  function openCoachingModal(existingSession, prefillContext) {
+    appState.coachingEditingId = existingSession ? existingSession.coachingId : '';
+    appState.coachingActionPlanItems = existingSession ? (existingSession.actionPlan || []) : [];
+    document.getElementById('coachingModalTitle').textContent = existingSession ? 'Edit Coaching Session' : 'New Coaching Session';
+    document.getElementById('coachingForm').reset();
+    document.getElementById('auditContextPreview').innerHTML = '';
+
+    var departmentSelect = document.getElementById('coachingFieldDepartment');
+    var departments = (appState.initialData && appState.initialData.departments) || [];
+    departmentSelect.innerHTML = '<option value="">Select a department</option>' +
+      departments.map(function (d) { return '<option value="' + escapeAttribute(d.departmentId) + '">' + escapeHtml(d.departmentName) + '</option>'; }).join('');
+
+    fillSelect2('coachingFieldType', COACHING_TYPE_OPTIONS_JS);
+    fillSelect2('coachingFieldStatus', COACHING_STATUS_OPTIONS_JS);
+    fillSelect2('coachingFieldPriority', COACHING_PRIORITY_OPTIONS_JS);
+
+    renderActionPlanRows();
+
+    if (existingSession) {
+      document.getElementById('coachingFieldCoach').value = existingSession.coach || '';
+      document.getElementById('coachingFieldType').value = existingSession.coachingType || '';
+      document.getElementById('coachingFieldStatus').value = existingSession.status || 'Scheduled';
+      document.getElementById('coachingFieldPriority').value = existingSession.priority || 'Medium';
+      document.getElementById('coachingFieldAuditId').value = existingSession.auditId || '';
+      document.getElementById('coachingFieldGoal').value = existingSession.goal || '';
+      document.getElementById('coachingFieldSummary').value = existingSession.summary || '';
+      document.getElementById('coachingFieldStrengths').value = existingSession.strengths || '';
+      document.getElementById('coachingFieldDevelopmentAreas').value = existingSession.developmentAreas || '';
+      document.getElementById('coachingFieldSuccessMeasure').value = existingSession.successMeasure || '';
+      document.getElementById('coachingFieldDueDate').value = existingSession.dueDate || '';
+      document.getElementById('coachingFieldFollowUpDate').value = existingSession.followUpDate || '';
+      document.getElementById('coachingFieldReAuditDate').value = existingSession.reAuditDate || '';
+      document.getElementById('coachingFieldCompletionDate').value = existingSession.completionDate || '';
+      document.getElementById('coachingFieldNextReview').value = existingSession.nextReview || '';
+      document.getElementById('coachingFieldManagerNotes').value = existingSession.managerNotes || '';
+      document.getElementById('coachingFieldEmployeeComments').value = existingSession.employeeComments || '';
+      appState.coachingContextAgentId = existingSession.agentId;
+    } else {
+      document.getElementById('coachingFieldStatus').value = 'Scheduled';
+      document.getElementById('coachingFieldPriority').value = 'Medium';
+      appState.coachingContextAgentId = prefillContext ? prefillContext.agentId : '';
+      if (prefillContext && prefillContext.departmentId) {
+        departmentSelect.value = prefillContext.departmentId;
+        handleCoachingDepartmentChange({ target: departmentSelect }, prefillContext.agentId);
+      }
+      if (prefillContext && prefillContext.auditId) {
+        document.getElementById('coachingFieldAuditId').value = prefillContext.auditId;
+      }
+    }
+
+    document.getElementById('coachingModalBackdrop').classList.add('open');
+  }
+
+  var COACHING_TYPE_OPTIONS_JS = ['Verbal', 'Written', 'Formal', 'Recognition'];
+  var COACHING_STATUS_OPTIONS_JS = ['Scheduled', 'In Progress', 'Waiting for Review', 'Completed', 'Cancelled'];
+  var COACHING_PRIORITY_OPTIONS_JS = ['Low', 'Medium', 'High'];
+
+  function fillSelect2(selectId, options) {
+    document.getElementById(selectId).innerHTML = options.map(function (o) { return '<option value="' + escapeAttribute(o) + '">' + escapeHtml(o) + '</option>'; }).join('');
+  }
+
+  function handleCoachingDepartmentChange(event, preselectAgentId) {
+    var departmentId = event.target.value;
+    var agentSelect = document.getElementById('coachingFieldAgent');
+    agentSelect.innerHTML = '<option value="">Select an agent</option>';
+    agentSelect.disabled = true;
+    if (!departmentId) { return; }
+
+    function populate(agents) {
+      populateAgentSelect(agentSelect, agents);
+      if (preselectAgentId) { agentSelect.value = preselectAgentId; }
+    }
+
+    if (appState.agentsByDept[departmentId]) {
+      populate(appState.agentsByDept[departmentId]);
+      return;
+    }
+    callServer('getAgentsByDepartment', departmentId, function (result) {
+      appState.agentsByDept[departmentId] = result.agents || [];
+      populate(appState.agentsByDept[departmentId]);
+    });
+  }
+
+  function handleLoadAuditContext() {
+    var auditId = document.getElementById('coachingFieldAuditId').value.trim();
+    if (!auditId) {
+      showStatus('Enter an Audit ID first.', 'error');
+      return;
+    }
+
+    callServer('getCoachingContextFromAudit', auditId, function (result) {
+      var audit = result.audit;
+      document.getElementById('auditContextPreview').innerHTML =
+        '<strong>' + escapeHtml(audit.agentName) + '</strong> \u2014 ' + formatScore(audit.score) + ' \u2014 ' +
+        escapeHtml(audit.failedCriteria.map(function (c) { return c.name; }).join(', ') || 'no failed criteria');
+
+      if (!document.getElementById('coachingFieldGoal').value) {
+        document.getElementById('coachingFieldGoal').value = 'Address ' + (audit.failedCriteria[0] ? audit.failedCriteria[0].name : 'audit findings');
+      }
+      if (!document.getElementById('coachingFieldDevelopmentAreas').value) {
+        document.getElementById('coachingFieldDevelopmentAreas').value = audit.failedCriteria.map(function (c) { return c.name; }).join(', ');
+      }
+      if (!document.getElementById('coachingFieldSummary').value) {
+        document.getElementById('coachingFieldSummary').value = 'Audit scored ' + audit.score + '. Comments: ' + (audit.comments || 'none') + '.';
+      }
+
+      var departmentSelect = document.getElementById('coachingFieldDepartment');
+      if (!departmentSelect.value && audit.departmentId) {
+        departmentSelect.value = audit.departmentId;
+        handleCoachingDepartmentChange({ target: departmentSelect }, audit.agentId);
+      }
+    });
+  }
+
+  // ---- Action Plan sub-editor ----------------------------------------------
+
+  function addActionPlanItem(existingItem) {
+    appState.coachingActionPlanItems.push(existingItem || { description: '', owner: '', dueDate: '', completed: false, completedDate: '', notes: '', progress: '' });
+    renderActionPlanRows();
+  }
+
+  function removeActionPlanItem(index) {
+    appState.coachingActionPlanItems.splice(index, 1);
+    renderActionPlanRows();
+  }
+
+  function renderActionPlanRows() {
+    var container = document.getElementById('actionPlanEditorRows');
+    if (!appState.coachingActionPlanItems.length) {
+      container.innerHTML = '<div class="empty-state">No action items yet.</div>';
+      return;
+    }
+
+    container.innerHTML = appState.coachingActionPlanItems.map(function (item, index) {
+      return (
+        '<div class="action-item-row">' +
+          '<input type="text" placeholder="Description" value="' + escapeAttribute(item.description) + '" data-action-field="description" data-action-index="' + index + '">' +
+          '<input type="text" placeholder="Owner" value="' + escapeAttribute(item.owner) + '" data-action-field="owner" data-action-index="' + index + '">' +
+          '<input type="date" value="' + escapeAttribute(item.dueDate) + '" data-action-field="dueDate" data-action-index="' + index + '">' +
+          '<label style="font-size:11px; display:flex; align-items:center; gap:4px;"><input type="checkbox"' + (item.completed ? ' checked' : '') + ' data-action-field="completed" data-action-index="' + index + '"> Done</label>' +
+          '<button type="button" class="btn btn-secondary btn-sm" data-remove-action="' + index + '">&times;</button>' +
+        '</div>'
+      );
+    }).join('');
+
+    Array.prototype.slice.call(container.querySelectorAll('[data-action-field]')).forEach(function (input) {
+      input.addEventListener('change', function () {
+        var index = Number(input.getAttribute('data-action-index'));
+        var field = input.getAttribute('data-action-field');
+        appState.coachingActionPlanItems[index][field] = field === 'completed' ? input.checked : input.value;
+      });
+    });
+    Array.prototype.slice.call(container.querySelectorAll('[data-remove-action]')).forEach(function (button) {
+      button.addEventListener('click', function () { removeActionPlanItem(Number(button.getAttribute('data-remove-action'))); });
+    });
+  }
+
+  function closeCoachingModal() {
+    appState.coachingEditingId = '';
+    appState.coachingActionPlanItems = [];
+    document.getElementById('coachingForm').reset();
+    document.getElementById('coachingModalBackdrop').classList.remove('open');
+  }
+
+  function handleCoachingFormSubmit(event) {
+    event.preventDefault();
+
+    var agentId = appState.coachingContextAgentId || document.getElementById('coachingFieldAgent').value;
+    if (!agentId) {
+      showStatus('Select a department and agent before saving.', 'error');
+      return;
+    }
+
+    var values = {
+      'Coach': document.getElementById('coachingFieldCoach').value,
+      'Coaching Type': document.getElementById('coachingFieldType').value,
+      'Overall Status': document.getElementById('coachingFieldStatus').value,
+      'Priority': document.getElementById('coachingFieldPriority').value,
+      'Audit ID': document.getElementById('coachingFieldAuditId').value,
+      'Goal': document.getElementById('coachingFieldGoal').value,
+      'Summary': document.getElementById('coachingFieldSummary').value,
+      'Strengths': document.getElementById('coachingFieldStrengths').value,
+      'Development Areas': document.getElementById('coachingFieldDevelopmentAreas').value,
+      'Action Plan': JSON.stringify(appState.coachingActionPlanItems),
+      'Success Measure': document.getElementById('coachingFieldSuccessMeasure').value,
+      'Due Date': document.getElementById('coachingFieldDueDate').value,
+      'Follow-up Date': document.getElementById('coachingFieldFollowUpDate').value,
+      'Re-audit Date': document.getElementById('coachingFieldReAuditDate').value,
+      'Completion Date': document.getElementById('coachingFieldCompletionDate').value,
+      'Next Review': document.getElementById('coachingFieldNextReview').value,
+      'Manager Notes': document.getElementById('coachingFieldManagerNotes').value,
+      'Employee Comments': document.getElementById('coachingFieldEmployeeComments').value
+    };
+
+    var saveButton = document.getElementById('saveCoachingModalButton');
+    saveButton.disabled = true;
+
+    if (appState.coachingEditingId) {
+      callServer('updateCoaching', [appState.coachingEditingId, { values: values }], function (result) {
+        closeCoachingModal();
+        showStatus(result.message || 'Coaching session updated.', 'success');
+        openCoachingSession(appState.coachingEditingId);
+      }, function () { saveButton.disabled = false; });
+    } else {
+      callServer('saveCoaching', { agentId: agentId, values: values }, function (result) {
+        closeCoachingModal();
+        showStatus(result.message || 'Coaching session saved.', 'success');
+        loadCoachingDashboard();
+      }, function () { saveButton.disabled = false; });
+    }
+  }
+
+  // ===========================================================================
   // CHARTS MODULE
   // Pure SVG, no external library ("no external libraries unless absolutely
   // necessary" per spec) - these are visualization-only functions over data
@@ -3851,6 +4257,26 @@
 
     document.getElementById('exportReportJsonButton').addEventListener('click', exportReportJson);
     document.getElementById('exportReportCsvButton').addEventListener('click', exportReportCsv);
+
+    Array.prototype.slice.call(document.querySelectorAll('[data-open-coaching-from-report]')).forEach(function (el) {
+      el.addEventListener('click', function () {
+        switchPage('coaching');
+        openCoachingSession(el.getAttribute('data-open-coaching-from-report'));
+      });
+    });
+    Array.prototype.slice.call(document.querySelectorAll('[data-create-coaching-from-audit]')).forEach(function (el) {
+      el.addEventListener('click', function () {
+        switchPage('coaching');
+        openCoachingModal(null, { auditId: el.getAttribute('data-create-coaching-from-audit') });
+      });
+    });
+    Array.prototype.slice.call(document.querySelectorAll('[data-create-coaching-from-agent]')).forEach(function (el) {
+      el.addEventListener('click', function () {
+        switchPage('coaching');
+        openCoachingModal(null, { agentId: el.getAttribute('data-create-coaching-from-agent'), departmentId: el.getAttribute('data-create-coaching-department') });
+      });
+    });
+
     shell.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
@@ -3904,7 +4330,15 @@
     });
     var recommendationsSection = reportSection('Recommendations', reportTable(['Criterion', 'Explanation', 'Coaching Tip'], recRows));
 
-    return kpis + scoreBar + headerSection + performanceSection + rootCauseSection + recommendationsSection;
+    var coachingHtml = r.coachingExists
+      ? '<div class="tag-chip-row">' + r.relatedCoaching.map(function (c) {
+          return '<span class="tag-chip" style="cursor:pointer;" data-open-coaching-from-report="' + escapeAttribute(c.coachingId) + '">' + escapeHtml(c.status) + ' \u2014 ' + escapeHtml(c.sessionDate) + '</span>';
+        }).join('') + '</div>'
+      : '<div class="empty-state">No coaching session linked to this audit yet.</div>';
+    var coachingSection = reportSection('Coaching', coachingHtml +
+      '<button type="button" class="btn btn-secondary btn-sm" style="margin-top: var(--space-3);" data-create-coaching-from-audit="' + escapeAttribute(h.auditId) + '">+ Create Coaching Session</button>');
+
+    return kpis + scoreBar + headerSection + performanceSection + rootCauseSection + recommendationsSection + coachingSection;
   }
 
   function renderAgentReportBody(r) {
@@ -3949,13 +4383,22 @@
       ? buildBarChartSvg(r.rootCauses.slice(0, 8).map(function (rc) { return { label: rc.rootCause, value: rc.count }; }))
       : '';
 
+    var coachingHtml = r.coachingExists
+      ? '<div class="tag-chip-row">' + r.coachingSessions.slice(0, 10).map(function (c) {
+          return '<span class="tag-chip" style="cursor:pointer;" data-open-coaching-from-report="' + escapeAttribute(c.coachingId) + '">' + escapeHtml(c.status) + ' \u2014 ' + escapeHtml(c.sessionDate) + '</span>';
+        }).join('') + '</div>'
+      : '<div class="empty-state">No coaching sessions for this agent yet.</div>';
+    var coachingSection = reportSection('Coaching', coachingHtml +
+      '<button type="button" class="btn btn-secondary btn-sm" style="margin-top: var(--space-3);" data-create-coaching-from-agent="' + escapeAttribute(r.profile.agentId) + '" data-create-coaching-department="' + escapeAttribute(r.profile.departmentId) + '">+ Create Coaching Session</button>');
+
     return kpis +
       reportSection('Score Timeline (weekly, solid = actual / dashed = 3-week average)', timelineChartHtml) +
       reportSection('Achievements', achievementsHtml) +
       reportSection('Strengths', strengthsHtml) +
       reportSection('Development Areas', devHtml) +
       reportSection('Root Causes', rootCauseChartHtml + reportTable(['Criterion', 'Count', '%', 'Type'], rootCauseRows)) +
-      reportSection('Audit History (most recent 25)', reportTable(['Date', 'Interaction ID', 'Score', 'Template', 'Failed Criteria'], historyRows));
+      reportSection('Audit History (most recent 25)', reportTable(['Date', 'Interaction ID', 'Score', 'Template', 'Failed Criteria'], historyRows)) +
+      coachingSection;
   }
 
   function renderWeeklyReportBody(r) {
