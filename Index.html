@@ -525,6 +525,9 @@
       <button class="nav-item" data-page="coaching">
         <span class="nav-icon">&#127919;</span> Coaching
       </button>
+      <button class="nav-item" data-page="import-center">
+        <span class="nav-icon">&#11015;</span> Import Center
+      </button>
       <button class="nav-item" data-page="settings">
         <span class="nav-icon">&#9881;</span> Settings
       </button>
@@ -944,6 +947,22 @@
       </div>
     </div>
 
+    <!-- IMPORT CENTER PAGE -->
+    <section class="page-view" data-page-view="import-center" id="page-import-center">
+      <div class="page-header">
+        <div>
+          <h1>Import Center</h1>
+          <p>Paste audit data from another system, review the parsed results, then import. Nothing is written until you approve.</p>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-secondary" id="viewImportDashboardButton">Dashboard</button>
+          <button class="btn btn-secondary" id="viewImportClipboardButton">Clipboard Import</button>
+          <button class="btn btn-secondary" id="viewImportHistoryButton">History</button>
+        </div>
+      </div>
+      <div id="importCenterContent"></div>
+    </section>
+
     <!-- SETTINGS PAGE -->
     <section class="page-view" data-page-view="settings" id="page-settings">
       <div class="page-header">
@@ -1158,6 +1177,9 @@
     coachingEditingId: '',
     coachingActionPlanItems: [],
     coachingContextAgentId: '',
+    importParsedRecords: [],
+    importValidationResults: [],
+    importSelectedParser: 'generic',
     activeFormType: '',
     modalContext: null           // { agentId, name } when Add is launched with a known agent
   };
@@ -1250,6 +1272,10 @@
     document.getElementById('loadAuditContextButton').addEventListener('click', handleLoadAuditContext);
     document.getElementById('addActionItemButton').addEventListener('click', function () { addActionPlanItem(null); });
 
+    document.getElementById('viewImportDashboardButton').addEventListener('click', loadImportDashboard);
+    document.getElementById('viewImportClipboardButton').addEventListener('click', loadImportClipboardView);
+    document.getElementById('viewImportHistoryButton').addEventListener('click', loadImportHistoryView);
+
     document.getElementById('coachingSearchInput').addEventListener('input', function (e) {
       renderLogTable('coaching', e.target.value);
     });
@@ -1292,6 +1318,7 @@
     if (pageName === 'reports' && appState.searchFilterOptionsLoaded) { loadReportPickerOptions(); }
     if (pageName === 'knowledge-base') { loadKnowledgeBaseHomepage(); }
     if (pageName === 'coaching') { loadCoachingDashboard(); }
+    if (pageName === 'import-center') { loadImportDashboard(); }
   }
 
   // ===========================================================================
@@ -3962,6 +3989,254 @@
         loadCoachingDashboard();
       }, function () { saveButton.disabled = false; });
     }
+  }
+
+  // ===========================================================================
+  // IMPORT CENTER MODULE (Phase 10A foundation)
+  // Workflow is strictly Paste -> Parse -> Preview -> Import. Parse and
+  // Preview (validation) never write anything - only the final "Import All"
+  // action calls importAuditRecords. A record with unresolved errors is
+  // shown as "will not import" in its own row rather than blocking the
+  // whole batch - partial success (some imported, some failed/skipped) is
+  // the expected outcome, matching the Import Summary fields the backend
+  // already returns (Imported / Failed / Duplicates / Warnings).
+  // ===========================================================================
+
+  function loadImportDashboard() {
+    document.getElementById('importCenterContent').innerHTML = '<div class="empty-state">Loading...</div>';
+    callServer('getImportDashboard', undefined, function (result) {
+      renderImportDashboard(result);
+    });
+  }
+
+  function renderImportDashboard(d) {
+    var kpis = reportKpiGrid([
+      { label: 'Imports Today', value: d.importsToday },
+      { label: 'Successful Imports', value: d.successfulImports },
+      { label: 'Failed Imports', value: d.failedImports },
+      { label: 'Duplicates Prevented', value: d.duplicatesPrevented },
+      { label: 'Pending Reviews', value: d.pendingReviews },
+      { label: 'Avg Import Time', value: d.averageImportTimeSeconds !== null ? d.averageImportTimeSeconds + 's' : 'N/A' }
+    ]);
+    document.getElementById('importCenterContent').innerHTML = kpis +
+      '<div class="empty-state">Pending Reviews is always 0 in this phase - previews aren\u2019t saved if you navigate away before importing (a Phase 10B item).</div>';
+  }
+
+  function loadImportClipboardView() {
+    document.getElementById('importCenterContent').innerHTML =
+      '<div class="card review-panel">' +
+        '<div class="form-grid" style="margin-bottom: var(--space-3);">' +
+          '<div class="field-group"><label>Parser</label><select id="importParserSelect"></select></div>' +
+        '</div>' +
+        '<div class="field-group"><label>Paste audit data</label><textarea id="importClipboardTextarea" style="min-height: 220px;" placeholder="Paste one or more audits, separated by a blank line between each..."></textarea></div>' +
+        '<div class="review-actions">' +
+          '<button class="btn btn-primary" id="parseImportButton" type="button">Parse</button>' +
+          '<button class="btn btn-secondary" id="clearImportButton" type="button">Clear</button>' +
+          '<button class="btn btn-primary" id="runImportButton" type="button" style="display:none;">Import</button>' +
+          '<button class="btn btn-secondary" id="cancelImportButton" type="button" style="display:none;">Cancel</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="importPreviewShell"></div>';
+
+    callServer('getAvailableParsers', undefined, function (result) {
+      var select = document.getElementById('importParserSelect');
+      select.innerHTML = result.parsers.map(function (p) {
+        return '<option value="' + escapeAttribute(p.key) + '">' + escapeHtml(p.label) + '</option>';
+      }).join('');
+    });
+
+    if (!appState.searchFilterOptionsLoaded) {
+      loadSearchFilterOptions();
+    }
+
+    document.getElementById('parseImportButton').addEventListener('click', handleParseImport);
+    document.getElementById('clearImportButton').addEventListener('click', function () {
+      document.getElementById('importClipboardTextarea').value = '';
+      document.getElementById('importPreviewShell').innerHTML = '';
+      toggleImportActionButtons(false);
+    });
+    document.getElementById('cancelImportButton').addEventListener('click', function () {
+      appState.importParsedRecords = [];
+      appState.importValidationResults = [];
+      document.getElementById('importPreviewShell').innerHTML = '';
+      toggleImportActionButtons(false);
+    });
+    document.getElementById('runImportButton').addEventListener('click', handleRunImport);
+  }
+
+  function toggleImportActionButtons(previewReady) {
+    document.getElementById('runImportButton').style.display = previewReady ? 'inline-flex' : 'none';
+    document.getElementById('cancelImportButton').style.display = previewReady ? 'inline-flex' : 'none';
+  }
+
+  function handleParseImport() {
+    var parserKey = document.getElementById('importParserSelect').value;
+    var rawText = document.getElementById('importClipboardTextarea').value;
+    if (!rawText.trim()) {
+      showStatus('Paste some audit data first.', 'error');
+      return;
+    }
+
+    showStatus('Parsing...', 'info');
+    callServer('parseClipboardText', [parserKey, rawText], function (parseResult) {
+      var records = parseResult.records || [];
+      if (!records.length) {
+        showStatus('Nothing was parsed from the pasted text.', 'error');
+        return;
+      }
+
+      callServer('validateImportBatch', records, function (validationResult) {
+        appState.importParsedRecords = records;
+        appState.importValidationResults = validationResult.results;
+        renderImportPreview(validationResult.results);
+        toggleImportActionButtons(true);
+        showStatus(records.length + ' record(s) parsed.', 'success');
+      });
+    });
+  }
+
+  function renderImportPreview(results) {
+    var shell = document.getElementById('importPreviewShell');
+
+    var cardsHtml = results.map(function (item, index) {
+      var record = item.record;
+      var v = item.validation;
+
+      if (record.isStub) {
+        return '<div class="card review-panel" style="margin-bottom: var(--space-3);"><div class="empty-state">' + escapeHtml(record.stubMessage) + '</div></div>';
+      }
+
+      var confidenceColor = v.confidenceScore >= 90 ? 'success' : (v.confidenceScore >= 60 ? 'warning' : 'danger');
+      var willImport = v.isReady;
+
+      var agentFieldHtml = v.resolvedAgentId
+        ? '<strong>' + escapeHtml(v.resolvedAgentName) + '</strong>'
+        : '<select data-correct-agent="' + index + '"><option value="">Select agent to correct</option>' +
+            (appState.searchFilterOptions ? appState.searchFilterOptions.agents.map(function (a) {
+              return '<option value="' + escapeAttribute(a.agentId) + '">' + escapeHtml(a.name) + '</option>';
+            }).join('') : '') + '</select>';
+
+      var errorsHtml = v.errors.length ? '<div style="color: var(--danger); font-size:12px;">' + v.errors.map(escapeHtml).join('<br>') + '</div>' : '';
+      var warningsHtml = v.warnings.length ? '<div style="color: var(--warning); font-size:12px;">' + v.warnings.map(escapeHtml).join('<br>') + '</div>' : '';
+
+      return (
+        '<div class="card review-panel" style="margin-bottom: var(--space-3);" data-import-record-index="' + index + '">' +
+          '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: var(--space-3);">' +
+            '<div>' + agentFieldHtml + ' &mdash; ' + escapeHtml(record.department || 'department unresolved') + '</div>' +
+            '<span class="badge ' + confidenceColor + '">' + v.confidenceScore + '% confidence' + (willImport ? '' : ' \u2014 will not import') + '</span>' +
+          '</div>' +
+          reportProgressBar(v.confidenceScore) +
+          '<div class="profile-meta-grid" style="margin-top: var(--space-3);">' +
+            metaHtmlItem('Score', toDisplayString(record.score)) +
+            metaHtmlItem('Audit Date', record.auditDate) +
+            metaHtmlItem('Template', record.template) +
+            metaHtmlItem('Interaction ID', record.interactionId) +
+            metaHtmlItem('Failed Criteria', (record.failedCriteria || []).join(', ')) +
+          '</div>' +
+          (record.comments ? '<p style="font-size:12.5px; color: var(--text-muted); margin-top: var(--space-2);">' + escapeHtml(record.comments) + '</p>' : '') +
+          errorsHtml + warningsHtml +
+        '</div>'
+      );
+    }).join('');
+
+    shell.innerHTML = cardsHtml;
+
+    Array.prototype.slice.call(shell.querySelectorAll('[data-correct-agent]')).forEach(function (select) {
+      select.addEventListener('change', function () {
+        var index = Number(select.getAttribute('data-correct-agent'));
+        var agentOption = (appState.searchFilterOptions.agents || []).find(function (a) { return a.agentId === select.value; });
+        if (!agentOption) { return; }
+
+        appState.importValidationResults[index].validation.resolvedAgentId = agentOption.agentId;
+        appState.importValidationResults[index].validation.resolvedAgentName = agentOption.name;
+        appState.importValidationResults[index].validation.resolvedDepartmentId = agentOption.departmentId;
+        appState.importValidationResults[index].validation.errors = appState.importValidationResults[index].validation.errors.filter(function (e) {
+          return e.indexOf('Agent') === -1;
+        });
+        appState.importValidationResults[index].validation.isReady = appState.importValidationResults[index].validation.errors.length === 0;
+        renderImportPreview(appState.importValidationResults);
+      });
+    });
+  }
+
+  function handleRunImport() {
+    var items = appState.importValidationResults
+      .filter(function (item) { return !item.record.isStub; })
+      .map(function (item) {
+        return {
+          agentId: item.validation.resolvedAgentId,
+          score: item.record.score,
+          auditDate: item.record.auditDate,
+          comments: item.record.comments,
+          failedCriteria: item.record.failedCriteria,
+          interactionId: item.record.interactionId,
+          wasDuplicate: !!item.validation.duplicateOfDetailId,
+          warningCount: item.validation.warnings.length
+        };
+      });
+
+    if (!items.length) {
+      showStatus('Nothing to import.', 'error');
+      return;
+    }
+
+    showStatus('Importing...', 'info');
+    callServer('importAuditRecords', { items: items, source: 'Clipboard Import', importedBy: '' }, function (result) {
+      renderImportSummary(result);
+      appState.importParsedRecords = [];
+      appState.importValidationResults = [];
+    });
+  }
+
+  function renderImportSummary(result) {
+    document.getElementById('importPreviewShell').innerHTML =
+      '<div class="card review-panel" style="background: var(--primary-soft);">' +
+        '<h3 style="font-size:15px; margin-bottom: var(--space-3);">Import Summary</h3>' +
+        reportKpiGrid([
+          { label: 'Imported', value: result.recordsImported },
+          { label: 'Failed', value: result.recordsFailed },
+          { label: 'Duplicates', value: result.duplicatesFound },
+          { label: 'Warnings', value: result.warnings },
+          { label: 'Duration', value: result.durationSeconds + 's' },
+          { label: 'Import ID', value: result.importId }
+        ]) +
+      '</div>';
+    document.getElementById('importClipboardTextarea').value = '';
+    toggleImportActionButtons(false);
+    showStatus('Import complete (' + result.status + ').', result.status === 'Failed' ? 'error' : 'success');
+  }
+
+  function loadImportHistoryView() {
+    document.getElementById('importCenterContent').innerHTML = '<div class="empty-state">Loading...</div>';
+    callServer('getImportHistory', undefined, function (result) {
+      renderImportHistory(result.imports || []);
+    });
+  }
+
+  function renderImportHistory(imports) {
+    if (!imports.length) {
+      document.getElementById('importCenterContent').innerHTML = '<div class="table-shell"><div class="empty-state">No imports yet.</div></div>';
+      return;
+    }
+
+    var rows = imports.map(function (imp) {
+      var statusBadge = imp.status.toLowerCase() === 'success' ? 'success' : (imp.status.toLowerCase() === 'failed' ? 'danger' : 'warning');
+      return (
+        '<tr>' +
+          '<td>' + escapeHtml(imp.importId) + '</td>' +
+          '<td>' + escapeHtml(imp.importDate) + '</td>' +
+          '<td>' + escapeHtml(imp.source) + '</td>' +
+          '<td>' + escapeHtml(toDisplayString(imp.recordsProcessed)) + '</td>' +
+          '<td>' + escapeHtml(toDisplayString(imp.recordsImported)) + '</td>' +
+          '<td>' + escapeHtml(toDisplayString(imp.recordsFailed)) + '</td>' +
+          '<td>' + escapeHtml(toDisplayString(imp.duplicatesFound)) + '</td>' +
+          '<td><span class="badge ' + statusBadge + '">' + escapeHtml(imp.status) + '</span></td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    document.getElementById('importCenterContent').innerHTML =
+      '<div class="table-shell"><table><thead><tr><th>Import ID</th><th>Date</th><th>Source</th><th>Processed</th><th>Imported</th><th>Failed</th><th>Duplicates</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
   }
 
   // ===========================================================================

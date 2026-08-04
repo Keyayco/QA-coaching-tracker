@@ -8,6 +8,7 @@ var Tracker = (function () {
     scorecardCriteria: 'Scorecard Criteria',
     scorecardTemplates: 'Scorecard Templates',
     knowledgeBaseArticles: 'Knowledge Base Articles',
+    importHistory: 'Import History',
     weeklyReviewDetail: 'Weekly Review Detail'
   };
 
@@ -109,8 +110,24 @@ var Tracker = (function () {
     managerNotes: 'Manager Notes',
     employeeComments: 'Employee Comments',
     nextReview: 'Next Review',
-    coachingUpdatedDate: 'Updated Date'
+    coachingUpdatedDate: 'Updated Date',
+    importId: 'Import ID',
+    importDate: 'Import Date',
+    importedBy: 'Imported By',
+    importSource: 'Source',
+    recordsProcessed: 'Records Processed',
+    recordsImported: 'Records Imported',
+    recordsFailed: 'Records Failed',
+    duplicatesFound: 'Duplicates Found',
+    importWarnings: 'Warnings',
+    importDuration: 'Duration',
+    importStatus: 'Status',
+    importNotes: 'Notes'
   };
+
+  var IMPORT_CONFIDENCE_ERROR_PENALTY = 30;
+  var IMPORT_CONFIDENCE_WARNING_PENALTY = 10;
+  var IMPORT_MANUAL_REVIEW_THRESHOLD = 60;
 
   var COACHING_STATUS_OPTIONS = ['Scheduled', 'In Progress', 'Waiting for Review', 'Completed', 'Cancelled'];
   var COACHING_PRIORITY_OPTIONS = ['Low', 'Medium', 'High'];
@@ -170,6 +187,11 @@ var Tracker = (function () {
   ID_GENERATION_CONFIG[SHEETS.knowledgeBaseArticles] = {
     header: FIELD_NAMES.articleId,
     prefix: 'KB-',
+    padLength: 4
+  };
+  ID_GENERATION_CONFIG[SHEETS.importHistory] = {
+    header: FIELD_NAMES.importId,
+    prefix: 'IMP-',
     padLength: 4
   };
 
@@ -3112,6 +3134,447 @@ var Tracker = (function () {
     return roundNumber(deltas.reduce(function (sum, d) { return sum + d; }, 0) / deltas.length, 2);
   }
 
+  // =========================================================================
+  // IMPORT CENTER MODULE (Phase 10A foundation)
+  // Parsers only extract into the normalized model - they never validate or
+  // write. The Validation Engine only checks/resolves - it never writes.
+  // The Import Engine only writes, using an import-specific path (see
+  // importAuditRecords) rather than saveWeeklyReview(), because that
+  // function requires 3-5 audits per call - a constraint from the guided
+  // Weekly Review UI, not a data-model rule. Every write still reuses the
+  // same generateNextSequentialId/coerceValueForSheet/computeTopFailedCriteria
+  // helpers saveWeeklyReview() itself uses - no duplicated write logic, just
+  // a different entry point sized for one-record-at-a-time or arbitrary
+  // batches instead of a fixed 3-5.
+  // =========================================================================
+
+  // ---- Parser Registry ------------------------------------------------
+
+  var PARSER_REGISTRY = {
+    generic: parseGenericText,
+    klaus: parseKlausPlaceholder,
+    googleform: parseGoogleFormPlaceholder
+  };
+
+  function parseClipboardText(parserKey, rawText) {
+    var parser = PARSER_REGISTRY[normalizeHeader(parserKey)];
+    if (!parser) {
+      return { success: false, message: 'Unknown parser: ' + parserKey + '. Available: ' + Object.keys(PARSER_REGISTRY).join(', ') };
+    }
+    var records = parser(rawText);
+    return { success: true, parserKey: parserKey, records: records };
+  }
+
+  function getAvailableParsers() {
+    return {
+      success: true,
+      parsers: [
+        { key: 'generic', label: 'Generic (label-based extraction)', isStub: false },
+        { key: 'klaus', label: 'Klaus Export (placeholder)', isStub: true },
+        { key: 'googleform', label: 'Google Form Export (placeholder)', isStub: true }
+      ]
+    };
+  }
+
+  function splitIntoAuditBlocks(rawText) {
+    var normalized = toSafeString(rawText);
+    if (!normalized) { return []; }
+    var blocks = normalized.split(/\n\s*\n+/).map(function (b) { return b.trim(); }).filter(Boolean);
+    return blocks.length ? blocks : [normalized.trim()];
+  }
+
+  // ---- Generic Parser (the only one with real extraction logic) --------
+
+  function extractLabeledValue(text, labelVariants) {
+    for (var i = 0; i < labelVariants.length; i += 1) {
+      var regex = new RegExp('^\\s*' + labelVariants[i] + '\\s*[:\\-]\\s*(.+)$', 'im');
+      var match = text.match(regex);
+      if (match) { return match[1].trim(); }
+    }
+    return '';
+  }
+
+  function parseGenericText(rawText) {
+    return splitIntoAuditBlocks(rawText).map(function (block) {
+      var agent = extractLabeledValue(block, ['agent', 'agent name', 'employee']);
+      var department = extractLabeledValue(block, ['department', 'dept', 'team']);
+      var template = extractLabeledValue(block, ['template', 'scorecard', 'scorecard template']);
+      var scoreRaw = extractLabeledValue(block, ['score', 'qa score', 'overall score']);
+      var dateRaw = extractLabeledValue(block, ['date', 'audit date', 'call date']);
+      var comments = extractLabeledValue(block, ['comments', 'notes', 'qa comments', 'feedback']);
+      var failedCriteriaRaw = extractLabeledValue(block, ['failed criteria', 'failed', 'issues']);
+      var interactionId = extractLabeledValue(block, ['interaction id', 'ticket', 'ticket id', 'call id', 'conversation id']);
+
+      // Fallback pattern matching when no explicit label is found - "missing
+      // fields should not break parsing," so these are best-effort only.
+      if (!scoreRaw) {
+        var scoreMatch = block.match(/\b(\d{1,3})\s*(%|\/\s*100)/);
+        if (scoreMatch) { scoreRaw = scoreMatch[1]; }
+      }
+      if (!dateRaw) {
+        var dateMatch = block.match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})\b/);
+        if (dateMatch) { dateRaw = dateMatch[1]; }
+      }
+
+      return {
+        agent: agent,
+        department: department,
+        template: template,
+        auditDate: dateRaw,
+        auditor: '',
+        score: scoreRaw ? toNumber(scoreRaw.replace('%', '').replace('/100', '')) : null,
+        comments: comments,
+        failedCriteria: failedCriteriaRaw ? failedCriteriaRaw.split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [],
+        interactionId: interactionId,
+        source: 'generic',
+        rawText: block
+      };
+    });
+  }
+
+  // ---- Klaus / Google Form: structured stubs only, per Phase 10A scope --
+
+  function parseKlausPlaceholder(rawText) {
+    return splitIntoAuditBlocks(rawText).map(function (block) {
+      return buildParserStubRecord(block, 'klaus', 'Klaus parser is a placeholder - real extraction logic is a Phase 10B feature.');
+    });
+  }
+
+  function parseGoogleFormPlaceholder(rawText) {
+    return splitIntoAuditBlocks(rawText).map(function (block) {
+      return buildParserStubRecord(block, 'googleform', 'Google Form parser is a placeholder - real extraction logic is a Phase 10B feature.');
+    });
+  }
+
+  function buildParserStubRecord(block, source, stubMessage) {
+    return {
+      agent: '', department: '', template: '', auditDate: '', auditor: '',
+      score: null, comments: '', failedCriteria: [], interactionId: '',
+      source: source, rawText: block,
+      isStub: true, stubMessage: stubMessage
+    };
+  }
+
+  // ---- Validation Engine -------------------------------------------------
+
+  // Read once per validation batch, reused across every record in it -
+  // never re-read per record.
+  function buildImportLookups() {
+    var agentData = readSheet(SHEETS.agents);
+    var departmentData = readSheet(SHEETS.departments);
+
+    return {
+      agents: agentData.rows.map(function (row) {
+        return {
+          agentId: toSafeString(getFieldValue(row, [FIELD_NAMES.agentId])),
+          name: toSafeString(getFieldValue(row, [FIELD_NAMES.name])),
+          departmentId: toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId]))
+        };
+      }),
+      departments: departmentData.rows.map(function (row) {
+        return {
+          departmentId: toSafeString(getFieldValue(row, [FIELD_NAMES.departmentId])),
+          departmentName: toSafeString(getFieldValue(row, [FIELD_NAMES.departmentName]))
+        };
+      }),
+      criteriaNames: getAllActiveCriteriaAcrossTemplates().criteria.map(function (c) { return c.name; }),
+      dataset: buildAuditAnalyticsDataset()
+    };
+  }
+
+  function resolveAgentByName(name, lookups) {
+    var normalized = normalizeHeader(name);
+    if (!normalized) { return null; }
+    return lookups.agents.find(function (a) { return normalizeHeader(a.name) === normalized; }) || null;
+  }
+
+  function resolveDepartmentByName(name, lookups) {
+    var normalized = normalizeHeader(name);
+    if (!normalized) { return null; }
+    return lookups.departments.find(function (d) { return normalizeHeader(d.departmentName) === normalized; }) || null;
+  }
+
+  function findPotentialDuplicate(record, resolvedAgent, parsedDate, lookups) {
+    if (record.interactionId) {
+      var byInteractionId = lookups.dataset.find(function (r) { return normalizeHeader(r.interactionId) === normalizeHeader(record.interactionId); });
+      if (byInteractionId) { return byInteractionId; }
+    }
+    if (resolvedAgent && parsedDate && typeof record.score === 'number' && !isNaN(record.score)) {
+      return lookups.dataset.find(function (r) {
+        return r.agentId === resolvedAgent.agentId && r.auditDateObj &&
+          formatDate(r.auditDateObj) === formatDate(parsedDate) && r.score === record.score;
+      }) || null;
+    }
+    return null;
+  }
+
+  // Confidence score: starts at 100, -30 per error, -10 per warning, floored
+  // at 0. Documented formula, not an industry standard - matches the doc's
+  // own example anchors (100% clean / ~90% one warning / ~70% multiple).
+  function validateImportRecord(record, lookups) {
+    var errors = [];
+    var warnings = [];
+
+    var resolvedAgent = resolveAgentByName(record.agent, lookups);
+    if (!record.agent) {
+      errors.push('Agent is missing.');
+    } else if (!resolvedAgent) {
+      errors.push('Agent "' + record.agent + '" was not recognized.');
+    }
+
+    var resolvedDepartment = record.department ? resolveDepartmentByName(record.department, lookups) : null;
+    if (record.department && !resolvedDepartment) {
+      warnings.push('Department "' + record.department + '" was not recognized - the agent\u2019s own department will be used instead.');
+    }
+    if (!resolvedDepartment && resolvedAgent) {
+      resolvedDepartment = lookups.departments.find(function (d) { return d.departmentId === resolvedAgent.departmentId; }) || null;
+    }
+
+    if (record.score === null || record.score === undefined || isNaN(record.score)) {
+      errors.push('Score is missing or not a valid number.');
+    } else if (record.score < 0 || record.score > 100) {
+      errors.push('Score ' + record.score + ' is outside the valid 0-100 range.');
+    }
+
+    var parsedDate = record.auditDate ? parseDate(record.auditDate) : null;
+    if (!record.auditDate) {
+      errors.push('Audit Date is missing.');
+    } else if (!parsedDate) {
+      errors.push('Audit Date "' + record.auditDate + '" could not be parsed.');
+    }
+
+    (record.failedCriteria || []).forEach(function (criterionName) {
+      var known = lookups.criteriaNames.some(function (name) { return normalizeHeader(name) === normalizeHeader(criterionName); });
+      if (!known) { warnings.push('Failed Criteria "' + criterionName + '" does not match any known Scorecard Criterion.'); }
+    });
+
+    if (!record.interactionId) {
+      warnings.push('No Interaction ID provided - duplicate detection will rely on Agent + Date + Score only.');
+    }
+
+    var duplicate = findPotentialDuplicate(record, resolvedAgent, parsedDate, lookups);
+    if (duplicate) {
+      warnings.push('Potential duplicate of an existing audit (' + duplicate.detailId + ', ' + duplicate.auditDate + ').');
+    }
+
+    var confidenceScore = Math.max(0, 100 - errors.length * IMPORT_CONFIDENCE_ERROR_PENALTY - warnings.length * IMPORT_CONFIDENCE_WARNING_PENALTY);
+
+    return {
+      errors: errors,
+      warnings: warnings,
+      isReady: errors.length === 0,
+      confidenceScore: confidenceScore,
+      needsManualReview: confidenceScore < IMPORT_MANUAL_REVIEW_THRESHOLD,
+      resolvedAgentId: resolvedAgent ? resolvedAgent.agentId : '',
+      resolvedAgentName: resolvedAgent ? resolvedAgent.name : '',
+      resolvedDepartmentId: resolvedDepartment ? resolvedDepartment.departmentId : '',
+      resolvedDepartmentName: resolvedDepartment ? resolvedDepartment.departmentName : '',
+      duplicateOfDetailId: duplicate ? duplicate.detailId : ''
+    };
+  }
+
+  // Validates an entire parsed batch in one call - lookups (including the
+  // analytics dataset) are built exactly once, not once per record.
+  function validateImportBatch(records) {
+    var lookups = buildImportLookups();
+    var results = (records || []).map(function (record) {
+      return { record: record, validation: validateImportRecord(record, lookups) };
+    });
+    return { success: true, results: results };
+  }
+
+  // ---- Import Engine ------------------------------------------------------
+
+  // Writes approved records to Performance Log + Weekly Review Detail,
+  // reusing the same ID-generation and coercion helpers saveWeeklyReview()
+  // uses, but without that function's 3-5-audit-per-call requirement (see
+  // module comment above). Each item is expected to already carry a
+  // resolved agentId (from validateImportBatch, possibly overridden by a
+  // manual correction on the frontend) - items without one are skipped and
+  // counted as failed, without re-running full validation again.
+  function importAuditRecords(payload) {
+    var startTime = new Date().getTime();
+    var items = (payload && payload.items) || [];
+    var source = toSafeString(payload && payload.source) || 'Clipboard Import';
+    var importedBy = toSafeString(payload && payload.importedBy);
+
+    var agentData = readSheet(SHEETS.agents);
+    var performanceData = readSheet(SHEETS.performanceLog);
+    var detailData = readSheet(SHEETS.weeklyReviewDetail);
+
+    var nextPerformanceNumber = computeMaxSequentialNumber(performanceData.rows, [FIELD_NAMES.performanceId]);
+    var nextDetailNumber = computeMaxSequentialNumber(detailData.rows, [FIELD_NAMES.detailId]);
+
+    var importedCount = 0;
+    var failedCount = 0;
+    var duplicateCount = 0;
+    var warningCount = 0;
+
+    items.forEach(function (item) {
+      var agentId = toSafeString(item.agentId);
+      var agentRow = agentId ? findRowByField(agentData.rows, FIELD_NAMES.agentId, agentId) : null;
+      var score = toNumber(item.score);
+      var auditDate = parseDate(item.auditDate);
+
+      if (!agentRow || typeof score !== 'number' || isNaN(score) || score < 0 || score > 100 || !auditDate) {
+        failedCount += 1;
+        return;
+      }
+
+      var agentName = toSafeString(getFieldValue(agentRow, [FIELD_NAMES.name]));
+      var failedCriteriaList = Array.isArray(item.failedCriteria) ? item.failedCriteria : [];
+      var rootCauses = failedCriteriaList.length ? computeTopFailedCriteria([{ failedCriteria: failedCriteriaList }]) : { primary: '', secondary: '' };
+
+      nextPerformanceNumber += 1;
+      var performanceId = 'PERF-' + padNumber(nextPerformanceNumber, 6);
+      var todayForAutoFill = new Date();
+
+      var performanceRow = performanceData.headers.map(function (header) {
+        var normalized = normalizeHeader(header);
+        if (normalized === normalizeHeader(FIELD_NAMES.performanceId)) { return performanceId; }
+        if (normalized === normalizeHeader(FIELD_NAMES.agentId)) { return agentId; }
+        if (normalized === normalizeHeader(FIELD_NAMES.name)) { return agentName; }
+        if (isAutoFillDateHeader(header)) { return coerceValueForSheet(header, todayForAutoFill); }
+        if (normalized === normalizeHeader(FIELD_NAMES.weekEnding)) { return coerceValueForSheet(header, auditDate); }
+        if (normalized === normalizeHeader(FIELD_NAMES.averageScore)) { return score; }
+        if (normalized === normalizeHeader(FIELD_NAMES.numberOfAudits)) { return 1; }
+        if (normalized === normalizeHeader(FIELD_NAMES.primaryRootCause)) { return rootCauses.primary; }
+        if (normalized === normalizeHeader(FIELD_NAMES.secondaryRootCause)) { return rootCauses.secondary; }
+        if (normalized === normalizeHeader(FIELD_NAMES.qaSummary)) { return toSafeString(item.comments); }
+        return '';
+      });
+      performanceData.sheet.appendRow(performanceRow);
+
+      nextDetailNumber += 1;
+      var detailId = 'WRD-' + padNumber(nextDetailNumber, 6);
+      var detailRow = detailData.headers.map(function (header) {
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.detailId)) { return detailId; }
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.performanceId)) { return performanceId; }
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.agentId)) { return agentId; }
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.interactionId)) { return toSafeString(item.interactionId); }
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.auditDate)) { return coerceValueForSheet(header, auditDate); }
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.score)) { return score; }
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.failedCriteria)) { return failedCriteriaList.join(', '); }
+        if (headerMatchesAny(header, WEEKLY_REVIEW_DETAIL_HEADER_ALIASES.comments)) { return toSafeString(item.comments); }
+        return '';
+      });
+      detailData.sheet.appendRow(detailRow);
+
+      importedCount += 1;
+      if (item.wasDuplicate) { duplicateCount += 1; }
+      warningCount += toNumber(item.warningCount) || 0;
+    });
+
+    var durationSeconds = roundNumber((new Date().getTime() - startTime) / 1000, 2);
+    var status = failedCount === 0 ? 'Success' : (importedCount > 0 ? 'Partial' : 'Failed');
+
+    var importHistoryData = readSheet(SHEETS.importHistory);
+    var importId = generateNextSequentialId(importHistoryData.rows, [FIELD_NAMES.importId], 'IMP-', 4);
+    var historyRow = importHistoryData.headers.map(function (header) {
+      var normalized = normalizeHeader(header);
+      if (normalized === normalizeHeader(FIELD_NAMES.importId)) { return importId; }
+      if (normalized === normalizeHeader(FIELD_NAMES.importDate)) { return coerceValueForSheet(header, new Date()); }
+      if (normalized === normalizeHeader(FIELD_NAMES.importedBy)) { return importedBy; }
+      if (normalized === normalizeHeader(FIELD_NAMES.importSource)) { return source; }
+      if (normalized === normalizeHeader(FIELD_NAMES.recordsProcessed)) { return items.length; }
+      if (normalized === normalizeHeader(FIELD_NAMES.recordsImported)) { return importedCount; }
+      if (normalized === normalizeHeader(FIELD_NAMES.recordsFailed)) { return failedCount; }
+      if (normalized === normalizeHeader(FIELD_NAMES.duplicatesFound)) { return duplicateCount; }
+      if (normalized === normalizeHeader(FIELD_NAMES.importWarnings)) { return warningCount; }
+      if (normalized === normalizeHeader(FIELD_NAMES.importDuration)) { return durationSeconds; }
+      if (normalized === normalizeHeader(FIELD_NAMES.importStatus)) { return status; }
+      if (normalized === normalizeHeader(FIELD_NAMES.importNotes)) {
+        return items.length + ' record(s) processed via ' + source + '.';
+      }
+      return '';
+    });
+    importHistoryData.sheet.appendRow(historyRow);
+
+    return {
+      success: true,
+      importId: importId,
+      recordsProcessed: items.length,
+      recordsImported: importedCount,
+      recordsFailed: failedCount,
+      duplicatesFound: duplicateCount,
+      warnings: warningCount,
+      durationSeconds: durationSeconds,
+      status: status
+    };
+  }
+
+  // ---- Import Dashboard & History -----------------------------------------
+
+  function getImportDashboard() {
+    var importData = readSheet(SHEETS.importHistory);
+    var today = new Date();
+    var todayLabel = formatDate(today);
+
+    var importsToday = importData.rows.filter(function (row) {
+      var d = parseDate(getFieldValue(row, [FIELD_NAMES.importDate]));
+      return d && formatDate(d) === todayLabel;
+    }).length;
+
+    var successfulImports = importData.rows.filter(function (row) {
+      return normalizeHeader(toSafeString(getFieldValue(row, [FIELD_NAMES.importStatus]))) === 'success';
+    }).length;
+    var failedImports = importData.rows.filter(function (row) {
+      return normalizeHeader(toSafeString(getFieldValue(row, [FIELD_NAMES.importStatus]))) === 'failed';
+    }).length;
+    var duplicatesPrevented = importData.rows.reduce(function (sum, row) {
+      return sum + (toNumber(getFieldValue(row, [FIELD_NAMES.duplicatesFound])) || 0);
+    }, 0);
+
+    var durations = importData.rows
+      .map(function (row) { return toNumber(getFieldValue(row, [FIELD_NAMES.importDuration])); })
+      .filter(function (v) { return typeof v === 'number' && !isNaN(v); });
+    var averageImportTimeSeconds = durations.length
+      ? roundNumber(durations.reduce(function (sum, v) { return sum + v; }, 0) / durations.length, 2)
+      : null;
+
+    return {
+      success: true,
+      importsToday: importsToday,
+      successfulImports: successfulImports,
+      failedImports: failedImports,
+      duplicatesPrevented: duplicatesPrevented,
+      // Phase 10A never persists an in-progress import (parse -> preview ->
+      // import all happen in one page session with nothing saved in
+      // between), so there is no queryable "pending" state yet. Always 0,
+      // documented as a Phase 10B item rather than faked.
+      pendingReviews: 0,
+      averageImportTimeSeconds: averageImportTimeSeconds
+    };
+  }
+
+  function getImportHistory() {
+    var importData = readSheet(SHEETS.importHistory);
+    var records = importData.rows.map(function (row) {
+      return {
+        importId: toSafeString(getFieldValue(row, [FIELD_NAMES.importId])),
+        importDate: serializeValue(getFieldValue(row, [FIELD_NAMES.importDate])),
+        importedBy: toSafeString(getFieldValue(row, [FIELD_NAMES.importedBy])),
+        source: toSafeString(getFieldValue(row, [FIELD_NAMES.importSource])),
+        recordsProcessed: toNumber(getFieldValue(row, [FIELD_NAMES.recordsProcessed])),
+        recordsImported: toNumber(getFieldValue(row, [FIELD_NAMES.recordsImported])),
+        recordsFailed: toNumber(getFieldValue(row, [FIELD_NAMES.recordsFailed])),
+        duplicatesFound: toNumber(getFieldValue(row, [FIELD_NAMES.duplicatesFound])),
+        warnings: toNumber(getFieldValue(row, [FIELD_NAMES.importWarnings])),
+        duration: toNumber(getFieldValue(row, [FIELD_NAMES.importDuration])),
+        status: toSafeString(getFieldValue(row, [FIELD_NAMES.importStatus])),
+        notes: toSafeString(getFieldValue(row, [FIELD_NAMES.importNotes]))
+      };
+    });
+
+    records.sort(function (a, b) {
+      var dateA = parseDate(a.importDate);
+      var dateB = parseDate(b.importDate);
+      return (dateB ? dateB.getTime() : 0) - (dateA ? dateA.getTime() : 0);
+    });
+
+    return { success: true, imports: records };
+  }
+
   // Creates one Weekly Review (a Performance Log record) from 3-5 individual
   // audits, each stored as its own Weekly Review Detail row linked back to
   // the generated Performance ID. Statistics and the primary/secondary
@@ -4493,6 +4956,12 @@ var Tracker = (function () {
     saveCoachingActionPlan: saveCoachingActionPlan,
     updateCoaching: updateCoaching,
     getCoachingDashboard: getCoachingDashboard,
+    parseClipboardText: parseClipboardText,
+    getAvailableParsers: getAvailableParsers,
+    validateImportBatch: validateImportBatch,
+    importAuditRecords: importAuditRecords,
+    getImportDashboard: getImportDashboard,
+    getImportHistory: getImportHistory,
     saveWeeklyReview: saveWeeklyReview
   };
 })();

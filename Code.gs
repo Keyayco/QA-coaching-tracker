@@ -244,6 +244,42 @@ function getCoachingDashboard() {
   });
 }
 
+function parseClipboardText(parserKey, rawText) {
+  return runSafely(function () {
+    return Tracker.parseClipboardText(parserKey, rawText);
+  });
+}
+
+function getAvailableParsers() {
+  return runSafely(function () {
+    return Tracker.getAvailableParsers();
+  });
+}
+
+function validateImportBatch(records) {
+  return runSafely(function () {
+    return Tracker.validateImportBatch(records);
+  });
+}
+
+function importAuditRecords(payload) {
+  return runSafely(function () {
+    return Tracker.importAuditRecords(payload);
+  });
+}
+
+function getImportDashboard() {
+  return runSafely(function () {
+    return Tracker.getImportDashboard();
+  });
+}
+
+function getImportHistory() {
+  return runSafely(function () {
+    return Tracker.getImportHistory();
+  });
+}
+
 function saveWeeklyReview(payload) {
   return runSafely(function () {
     return Tracker.saveWeeklyReview(payload);
